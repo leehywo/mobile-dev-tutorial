@@ -4,8 +4,9 @@
 > 새 언어를 배우는 게 아닙니다 — **RN은 그냥 React입니다.** 컴포넌트·props·state·hooks 다 그대로.
 > 바뀌는 건 "DOM 엘리먼트(`<div>`) → 네이티브 엘리먼트(`<View>`)"와 모바일 특유의 것 몇 가지뿐.
 >
-> 같은 시리즈의 [네이티브 전환 튜토리얼(README.md)](./README.md)이 "JS 개발자 → Swift/Kotlin"이라면,
+> 같은 시리즈의 [네이티브 전환 튜토리얼](./native-android-ios.md)이 "JS 개발자 → Swift/Kotlin"이라면,
 > 이 문서는 "React 개발자 → RN"입니다. **하나의 코드로 iOS+Android 동시 출시**가 목표.
+> 어떤 트랙을 먼저 볼지 고민된다면 [저장소 인덱스(README)](./README.md)의 트랙 선택 가이드를 참고하세요.
 
 ---
 
@@ -268,7 +269,7 @@ const v = raw ? JSON.parse(raw) : null;
 
 # PART 3: 샘플 앱 4종 만들기
 
-[네이티브 튜토리얼](./README.md)과 **같은 앱들**을 RN으로. 비교하며 보면 "RN이 얼마나 React 그대로인지" 체감됩니다.
+[네이티브 튜토리얼](./native-android-ios.md)과 **같은 앱들**을 RN으로. 비교하며 보면 "RN이 얼마나 React 그대로인지" 체감됩니다.
 
 ## STEP 1: Hello World + 카운터
 

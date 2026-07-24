@@ -5,7 +5,7 @@
 > 하지만 좋은 소식: C#은 TypeScript와 사촌지간이고(같은 설계자 Anders Hejlsberg),
 > Unity의 최신 UI 시스템(UI Toolkit)은 **CSS/Flexbox 기반**이라 웹 개발자에게 오히려 유리합니다.
 >
-> 같은 시리즈: [네이티브 트랙(Kotlin/Swift)](./native-android-ios.md) · [React Native 트랙](./react-to-react-native.md) · [트랙 선택 가이드(README)](./README.md)
+> 같은 시리즈: [Android 트랙(Kotlin/Compose)](./android-kotlin-compose.md) · [iOS 트랙(Swift/SwiftUI)](./ios-swift-swiftui.md) · [React Native 트랙](./react-to-react-native.md) · [트랙 선택 가이드(README)](./README.md)
 
 ---
 

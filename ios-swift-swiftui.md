@@ -17,9 +17,11 @@
 
 - [PART 0: 개발 환경 세팅](#part-0-개발-환경-세팅)
 - [PART 1: Swift 문법 (JS와 1:1 비교)](#part-1-swift-문법-js와-11-비교)
+- [PART 1.5: Swift 심화](#part-15-swift-심화)
 - [PART 2: 매핑 치트시트](#part-2-매핑-치트시트)
 - [PART 3: 샘플 앱 만들기](#part-3-샘플-앱-만들기)
 - [PART 4: 실전 보강](#part-4-실전-보강)
+  - [4-0. SwiftUI 핵심 API 보강](#4-0-swiftui-핵심-api-보강)
 - [PART 5: 학습 로드맵 & 리소스](#part-5-학습-로드맵--리소스)
 
 ---
@@ -801,6 +803,354 @@ Apple 공식 A Swift Tour:
 https://docs.swift.org/swift-book/documentation/the-swift-programming-language/guidedtour
 → 언어 전체를 한 페이지로. 1시간이면 훑습니다
 ```
+
+---
+
+# PART 1.5: Swift 심화
+
+PART 1의 문법으로 앱을 시작할 수 있지만, 아래 요소는 모델·네트워크·SwiftUI 코드를 읽을 때
+곧바로 만납니다. JS와 이름이 같아 보여도 동작이 다른 부분을 중심으로 익히세요.
+
+## 1.5-1. 문자열 보간과 문자열 메서드 심화
+
+문자열은 화면 표시뿐 아니라 검색어 정리, 입력 검증, URL 구성에 계속 쓰입니다.
+JS의 템플릿 리터럴과 비슷하지만 Swift의 `String`은 유니코드 문자 단위라 인덱싱 방식이 다릅니다.
+
+```swift
+let title = "  달빛 아래의 도서관  "
+let price = 18_500
+
+let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+let label = "\(trimmed) · \(price.formatted(.currency(code: "KRW")))"
+
+trimmed.lowercased()
+trimmed.uppercased()
+trimmed.contains("도서관")
+trimmed.hasPrefix("달빛")
+trimmed.replacingOccurrences(of: "도서관", with: "서점")
+
+let tags = "소설,여행,야간".split(separator: ",").map(String.init)
+let summary = tags.joined(separator: " · ")
+```
+
+JS의 `text[0]`처럼 정수로 접근할 수는 없습니다. 이모지 하나가 여러 유니코드 스칼라로
+이루어질 수 있어 Swift가 잘못된 위치를 허용하지 않기 때문입니다.
+
+```swift
+let word = "📚책"
+let first = word.first                         // Character? = "📚"
+let secondIndex = word.index(after: word.startIndex)
+let second = word[secondIndex]                 // Character = "책"
+let safePrefix = String(word.prefix(1))        // "📚"
+```
+
+> ⭐ 숫자·날짜 표시는 문자열을 직접 이어 붙이기보다 `formatted()`를 쓰세요.
+> 사용자 지역 설정에 맞는 통화 기호·구분자·날짜 순서를 자동으로 적용합니다.
+>
+> ⚠️ `String.count`는 사람이 보는 문자 수에 가깝고 내부 바이트 수가 아닙니다.
+> 대용량 텍스트에서 반복 인덱싱하면 비쌀 수 있으니 배열처럼 무작정 순회하지 마세요.
+
+## 1.5-2. 튜플과 여러 반환값
+
+튜플은 관련된 값을 잠깐 묶되 별도 모델 타입까지 만들 필요가 없을 때 씁니다.
+JS의 배열 구조 분해와 닮았지만, 위치뿐 아니라 이름으로도 접근할 수 있습니다.
+
+```swift
+func expenseSummary(_ amounts: [Int]) -> (total: Int, average: Double) {
+    let total = amounts.reduce(0, +)
+    let average = amounts.isEmpty ? 0 : Double(total) / Double(amounts.count)
+    return (total, average)
+}
+
+let result = expenseSummary([12_000, 8_500, 21_000])
+print(result.total)
+
+let (total, average) = expenseSummary([12_000, 8_500, 21_000])
+print("합계 \(total), 평균 \(average)")
+
+let book = (title: "유리 정원", pages: 320)
+switch book {
+case (_, let pages) where pages >= 300:
+    print("긴 책")
+default:
+    print("가볍게 읽을 책")
+}
+```
+
+JS에서는 `{ total, average }` 객체를 반환하는 경우가 많습니다. Swift에서도 API 경계를
+넘거나 오래 저장할 값이면 이름 있는 `struct`가 더 낫고, 함수 내부의 임시 결과면 튜플이 간결합니다.
+
+```swift
+struct ExpenseSummary: Codable {
+    let total: Int
+    let average: Double
+}
+```
+
+> ⚠️ 튜플은 `Codable`을 자동 채택할 수 없고 프로토콜 준수에도 불리합니다.
+> 화면 모델·네트워크 응답·저장 데이터에는 `struct`, 짧은 지역 묶음에는 튜플을 쓰세요.
+
+## 1.5-3. 클로저: 후행 문법, 함수 전달, 캡처
+
+클로저는 동작을 값처럼 전달하려고 존재합니다. JS의 콜백·화살표 함수와 같은 자리에서 쓰며,
+SwiftUI의 `Button`, `ForEach`, 애니메이션 완료 처리도 모두 클로저입니다.
+
+```swift
+struct Book {
+    let title: String
+    let rating: Double
+}
+
+let books = [
+    Book(title: "파도 지도", rating: 4.7),
+    Book(title: "작은 행성", rating: 4.2)
+]
+
+func selectBooks(from books: [Book], rule: (Book) -> Bool) -> [Book] {
+    books.filter(rule)
+}
+
+let favorites = selectBooks(from: books) { book in   // 마지막 인자 → 후행 클로저
+    book.rating >= 4.5
+}
+```
+
+클로저는 바깥 값을 캡처합니다. JS 클로저와 같은 개념이지만 값 타입은 캡처 시점과
+변경 방식에 주의하고, 클래스 인스턴스를 오래 잡으면 ARC 순환 참조가 생길 수 있습니다.
+
+```swift
+func makeReadingCounter() -> () -> Int {
+    var count = 0
+    return {
+        count += 1                 // count의 저장 공간을 캡처해 호출 사이에 유지
+        return count
+    }
+}
+
+let nextReading = makeReadingCounter()
+nextReading()                      // 1
+nextReading()                      // 2
+
+final class DownloadQueue {
+    var onFinish: (() -> Void)?
+    func connect() {
+        onFinish = { [weak self] in self?.clearTemporaryFiles() }
+    }
+    func clearTemporaryFiles() { }
+}
+```
+
+> ⚠️ 모든 클로저에 습관적으로 `[weak self]`를 붙이지 마세요. `map`처럼 즉시 실행되는
+> 클로저에는 불필요합니다. 객체가 클로저를 프로퍼티로 오래 보관해 서로 붙잡을 때 필요합니다.
+
+## 1.5-4. `throws`, `do-catch`, `Result`
+
+실패를 정상 흐름과 분리하면 호출자가 오류를 무시하지 않게 할 수 있습니다. JS의 `throw`와 달리
+Swift는 함수 선언에 `throws`, 호출부에 `try`가 보여서 실패 가능성이 타입 수준에 드러납니다.
+
+```swift
+enum RecipeError: LocalizedError {
+    case emptyTitle
+    case invalidServings
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyTitle: "레시피 이름을 입력하세요."
+        case .invalidServings: "인원은 1명 이상이어야 합니다."
+        }
+    }
+}
+
+func makeRecipe(title: String, servings: Int) throws -> String {
+    guard !title.trimmingCharacters(in: .whitespaces).isEmpty else {
+        throw RecipeError.emptyTitle
+    }
+    guard servings > 0 else { throw RecipeError.invalidServings }
+    return "\(title) · \(servings)인분"
+}
+
+do {
+    let recipe = try makeRecipe(title: "토마토 수프", servings: 2)
+    print(recipe)
+} catch RecipeError.invalidServings {
+    print("인원 수를 다시 확인하세요.")
+} catch {
+    print(error.localizedDescription)
+}
+```
+
+`Result<Success, Failure>`는 성공/실패를 값으로 저장하거나 콜백으로 전달할 때 유용합니다.
+
+```swift
+let saved: Result<String, RecipeError> = Result {
+    try makeRecipe(title: "버섯 리조또", servings: 3)
+}
+
+let displayName = (try? saved.get()) ?? "저장 실패"   // try?는 실패를 nil로 바꿈
+```
+
+> ⚠️ `try?`는 오류의 이유를 버립니다. 값이 없어도 괜찮은 보조 기능에만 쓰고,
+> 사용자에게 실패 원인을 알려야 하는 저장·결제·네트워크 작업은 `do-catch`로 처리하세요.
+
+## 1.5-5. 프로퍼티, 접근 제어, `static`
+
+타입이 스스로 유효한 상태를 지키게 만들면 UI 여러 곳에서 검증 로직을 반복하지 않아도 됩니다.
+JS의 `get`, private field, 클래스 정적 멤버에 각각 계산 프로퍼티, 접근 제어, `static`이 대응합니다.
+
+```swift
+struct TravelBudget {
+    static let maximumDays = 90                 // 모든 인스턴스가 공유
+
+    let destination: String
+    private(set) var spent = 0                  // 외부 읽기 가능, 쓰기는 타입 내부만
+    var limit: Int {
+        didSet { limit = max(0, limit) }        // 값 변경 직후 보정
+    }
+
+    var remaining: Int { max(0, limit - spent) } // 계산 프로퍼티: 저장하지 않음
+
+    mutating func record(_ amount: Int) {
+        guard amount > 0 else { return }
+        spent += amount
+    }
+}
+
+var budget = TravelBudget(destination: "타이베이", limit: 500_000)
+budget.record(42_000)
+print(budget.remaining)
+```
+
+| 키워드 | 범위 | JS 감각 |
+|---|---|---|
+| `private` | 선언 타입·같은 파일의 extension 내부 | `#field`보다 엄격한 캡슐화 |
+| `fileprivate` | 같은 파일 | 모듈 패턴의 파일 내부 값 |
+| `internal` | 같은 모듈, 기본값 | export하지 않은 패키지 내부 API |
+| `public` | 다른 모듈에서도 사용 | `export` |
+
+> ⭐ 앱 코드에서는 우선 `private`로 닫고 필요한 만큼만 여세요. `private(set)`은
+> ViewModel 상태를 화면에서는 읽되 임의 수정은 막고 싶을 때 특히 유용합니다.
+>
+> ⚠️ 프로퍼티 옵저버 `didSet` 안에서 무거운 네트워크 요청을 시작하지 마세요.
+> 값 대입만으로 숨은 부수 효과가 생깁니다. 그런 작업은 이름 있는 메서드로 드러내세요.
+
+## 1.5-6. 클래스 상속, 초기화, `deinit`
+
+상속은 기존 클래스의 동작을 특수화할 때 쓰지만, SwiftUI 앱 데이터는 대체로 `struct`와
+프로토콜 조합이 더 단순합니다. UIKit 프레임워크 타입을 다룰 때 상속을 자주 만납니다.
+
+```swift
+class TripService {
+    let region: String
+
+    init(region: String) {
+        self.region = region
+    }
+
+    func itineraryTitle() -> String {
+        "\(region) 여행"
+    }
+
+    deinit {
+        print("TripService 연결 정리")
+    }
+}
+
+final class WeekendTripService: TripService {   // final = 더 이상 상속 불가
+    let nights: Int
+
+    init(region: String, nights: Int) {
+        self.nights = nights                    // 자식 프로퍼티 먼저 초기화
+        super.init(region: region)              // 그 다음 부모 초기화
+    }
+
+    override func itineraryTitle() -> String {
+        "\(region) · \(nights)박 일정"
+    }
+}
+```
+
+JS처럼 클래스는 참조 타입이고 `let` 인스턴스의 `var` 프로퍼티도 바꿀 수 있습니다.
+`deinit`은 마지막 강한 참조가 사라질 때 한 번 호출되어 구독·관찰자 같은 자원을 정리합니다.
+
+> ⚠️ `deinit`이 호출되지 않는다면 먼저 순환 참조를 의심하세요. 단, 앱 종료 시점에는
+> 모든 객체의 `deinit` 실행이 보장되지 않으므로 중요한 데이터 저장 장소로 쓰면 안 됩니다.
+
+## 1.5-7. `extension`과 프로토콜 extension
+
+extension은 원래 선언을 수정하지 않고 메서드·계산 프로퍼티·프로토콜 준수를 추가합니다.
+JS의 prototype 확장과 비슷해 보이지만 컴파일 시점에 타입 검사되고 저장 프로퍼티는 추가할 수 없습니다.
+
+```swift
+struct BookRecord {
+    let title: String
+    let finishedPages: Int
+    let totalPages: Int
+}
+
+extension BookRecord {
+    var progress: Double {
+        guard totalPages > 0 else { return 0 }
+        return Double(finishedPages) / Double(totalPages)
+    }
+}
+
+protocol Summarizable {
+    var title: String { get }
+    func summary() -> String
+}
+
+extension Summarizable {
+    func summary() -> String { "제목: \(title)" }     // 기본 구현
+}
+
+extension BookRecord: Summarizable { }                // 준수를 별도 파일에 정리 가능
+
+extension Array where Element == BookRecord {
+    var averageProgress: Double {
+        isEmpty ? 0 : map(\.progress).reduce(0, +) / Double(count)
+    }
+}
+```
+
+프로토콜 extension은 여러 타입이 공유할 기본 동작을 제공해 상속 없이 기능을 조합하게 해줍니다.
+표준 라이브러리의 `Collection`, SwiftUI의 `View` 수정자도 이 설계를 폭넓게 사용합니다.
+
+> ⚠️ 범용 타입에 의미가 모호한 extension을 마구 추가하면 어디서 온 API인지 찾기 어렵습니다.
+> 도메인이 분명한 이름을 쓰고, 짧은 문법 설탕보다 실제 중복 제거에 집중하세요.
+
+## 1.5-8. 옵셔널 체이닝과 nil 병합 심화
+
+옵셔널 체이닝은 중간 값 하나라도 `nil`이면 전체 표현식을 `nil`로 끝냅니다.
+JS의 `?.`와 거의 같고, `??`는 최종 기본값을 제공합니다.
+
+```swift
+struct Author { let nickname: String? }
+struct TravelBook { let author: Author?; let chapters: [String] }
+
+let book: TravelBook? = TravelBook(
+    author: Author(nickname: nil),
+    chapters: ["출발", "골목", "귀환"]
+)
+
+let nickname = book?.author?.nickname?.uppercased() ?? "익명 작가"
+let firstChapter = book?.chapters.first ?? "목차 없음"
+let chapterCount = book?.chapters.count ?? 0
+```
+
+옵셔널 메서드 호출도 체인에 포함됩니다. 값이 없으면 호출 자체가 생략됩니다.
+
+```swift
+var notes: [String]? = []
+notes?.append("야시장 방문")            // notes가 nil이면 아무 일도 없음
+
+let primary: String? = nil
+let backup: String? = "임시 표지"
+let cover = primary ?? backup ?? "기본 표지"  // 왼쪽부터 첫 non-nil
+```
+
+> ⚠️ `Int??`처럼 옵셔널이 중첩될 수 있습니다. 예를 들어 딕셔너리 조회 결과 자체가
+> 옵셔널 값을 담으면 “키 없음”과 “키는 있지만 nil”이 구분됩니다. 대부분은 모델을 단순화하거나
+> `flatMap`으로 한 단계 평탄화하는 편이 읽기 쉽습니다.
 
 ---
 
@@ -1700,6 +2050,806 @@ WindowGroup {
 
 # PART 4: 실전 보강
 
+## 4-0. SwiftUI 핵심 API 보강
+
+PART 3의 샘플 앱에서 주요 흐름을 먼저 보았습니다. 여기서는 프로젝트를 바꿔도 반복해서 쓰는
+화면 구성 요소를 주제별로 분해합니다. 예제는 서로 독립적이므로 필요한 절부터 실행해도 됩니다.
+
+### 4-0-1. `Form`, `Section`, 입력 컨트롤
+
+설정·예약·작성 화면은 직접 간격을 맞춘 `VStack`보다 `Form`이 적합합니다. 플랫폼이 행 높이,
+구분선, 키보드 동작, 접근성을 맡습니다. React의 폼 라이브러리와 네이티브 입력 묶음에 가깝습니다.
+
+```swift
+struct TravelPlanForm: View {
+    @State private var city = "교토"
+    @State private var style = "도보"
+    @State private var travelers = 2
+    @State private var departure = Date.now
+    @State private var dailyBudget = 120_000.0
+
+    let styles = ["도보", "대중교통", "렌터카"]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("기본 정보") {
+                    TextField("도시", text: $city)
+                        .textInputAutocapitalization(.words)
+
+                    Picker("이동 방식", selection: $style) {
+                        ForEach(styles, id: \.self) { Text($0) }
+                    }
+
+                    Stepper("여행자 \(travelers)명", value: $travelers, in: 1...8)
+                }
+
+                Section("일정과 예산") {
+                    DatePicker("출발일", selection: $departure, in: Date.now..., displayedComponents: .date)
+                    Slider(value: $dailyBudget, in: 30_000...500_000, step: 10_000)
+                    Text(dailyBudget, format: .currency(code: "KRW"))
+                        .foregroundStyle(.secondary)
+                } footer: {
+                    Text("예산은 1인 기준 하루 금액입니다.")
+                }
+            }
+            .navigationTitle("여행 계획")
+        }
+    }
+}
+```
+
+숫자 입력은 문자열로 받아 직접 파싱할 필요 없이 `format:` 오버로드를 쓸 수 있습니다.
+
+```swift
+@State private var cost = 0
+TextField("예상 지출", value: $cost, format: .number)
+    .keyboardType(.numberPad)
+```
+
+> ⚠️ `Picker`의 각 항목 값과 `selection` 타입이 정확히 같아야 합니다. `selection`은 enum인데
+> 행은 String이면 선택 표시가 움직이지 않습니다. 가능하면 `CaseIterable` enum을 사용하세요.
+
+### 4-0-2. 네비게이션의 선언형·값 기반 패턴
+
+`NavigationStack`은 브라우저 history처럼 화면 경로를 관리합니다. 단순 링크는 목적 뷰를 바로
+지정하고, 복원·딥링크가 필요하면 값과 `navigationDestination`을 분리합니다.
+
+```swift
+struct LibraryView: View {
+    let books = ["바람의 지도", "유리 정원", "밤의 우체국"]
+
+    var body: some View {
+        NavigationStack {
+            List(books, id: \.self) { title in
+                NavigationLink(value: title) {
+                    Label(title, systemImage: "book.closed")
+                }
+            }
+            .navigationTitle("내 서재")
+            .navigationDestination(for: String.self) { title in
+                BookDetailView(title: title)
+            }
+        }
+    }
+}
+
+struct BookDetailView: View {
+    let title: String
+    var body: some View {
+        Text("\(title)의 독서 기록")
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+    }
+}
+```
+
+프로그램이 경로를 바꾸어야 하면 배열 또는 `NavigationPath`를 바인딩합니다.
+
+```swift
+@State private var route: [String] = []
+
+NavigationStack(path: $route) {
+    Button("추천 도서로 이동") { route.append("오늘의 추천") }
+        .navigationDestination(for: String.self) { BookDetailView(title: $0) }
+}
+```
+
+iPad의 목록/상세 병렬 UI에는 `NavigationSplitView`를 사용합니다. 좁은 iPhone에서는 자동으로
+스택 형태로 접히므로 기기별 화면을 따로 만들 필요가 줄어듭니다.
+
+> ⚠️ 같은 타입에 `navigationDestination`을 여러 군데 중복 선언하면 가장 가까운 선언이
+> 우선되어 예상과 다른 화면이 열릴 수 있습니다. 스택 루트 한곳에 모으세요.
+
+### 4-0-3. 데이터 흐름: 소유권부터 결정하기
+
+SwiftUI 상태 선택의 핵심은 “누가 만들고, 누가 수정하고, 누가 읽는가”입니다. React의
+로컬 state → controlled props → Context/store 순서와 같습니다.
+
+```swift
+@Observable
+final class ReadingStore {
+    var goal = 20
+    var completed = 0
+    var progress: Double { goal == 0 ? 0 : Double(completed) / Double(goal) }
+}
+
+struct ReadingAppView: View {
+    @State private var store = ReadingStore()       // 생성·수명 소유
+
+    var body: some View {
+        ReadingDashboard()
+            .environment(store)                    // 깊은 자식에 주입
+    }
+}
+
+struct ReadingDashboard: View {
+    @Environment(ReadingStore.self) private var store
+
+    var body: some View {
+        @Bindable var store = store                 // 입력 컨트롤용 Binding 생성
+        Form {
+            Stepper("월 목표 \(store.goal)권", value: $store.goal, in: 1...100)
+            ProgressView(value: store.progress)
+            GoalEditor(goal: $store.goal)           // 자식이 단일 값을 수정
+        }
+    }
+}
+
+struct GoalEditor: View {
+    @Binding var goal: Int
+    var body: some View { Slider(value: Binding(
+        get: { Double(goal) },
+        set: { goal = Int($0) }
+    ), in: 1...100, step: 1) }
+}
+```
+
+`@Environment(\.dismiss)`, `@Environment(\.colorScheme)`처럼 시스템이 제공하는 값은 key path로,
+직접 만든 `@Observable` 객체는 타입으로 꺼냅니다.
+
+> ⭐ 상태는 가능한 한 사용하는 화면 가까이에 두고, 여러 화면이 정말 공유할 때만 environment로
+> 올리세요. 모든 것을 전역 store로 만들면 변경 경로가 숨고 Preview 준비도 어려워집니다.
+>
+> ⚠️ environment 객체를 주입하지 않으면 실행 중 크래시합니다. 해당 뷰의 Preview에도
+> `.environment(ReadingStore())`를 반드시 붙이세요.
+
+### 4-0-4. `alert`, `confirmationDialog`, `sheet`
+
+세 API는 모두 현재 화면 위에 선택지를 띄우지만 목적이 다릅니다. `alert`는 중요한 확인,
+`confirmationDialog`는 여러 행동 중 선택, `sheet`는 별도 작업 흐름입니다.
+
+```swift
+struct ExpenseActionsView: View {
+    @State private var showSaved = false
+    @State private var showActions = false
+    @State private var showEditor = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Button("지출 저장") { showSaved = true }
+            Button("더 보기") { showActions = true }
+            Button("지출 편집") { showEditor = true }
+        }
+        .alert("저장 완료", isPresented: $showSaved) {
+            Button("확인", role: .cancel) { }
+        } message: {
+            Text("이번 달 기록에 반영했습니다.")
+        }
+        .confirmationDialog("기록 관리", isPresented: $showActions) {
+            Button("복제") { duplicateExpense() }
+            Button("삭제", role: .destructive) { deleteExpense() }
+            Button("취소", role: .cancel) { }
+        }
+        .sheet(isPresented: $showEditor) {
+            ExpenseEditor()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private func duplicateExpense() { }
+    private func deleteExpense() { }
+}
+
+struct ExpenseEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    var body: some View { Button("편집 완료") { dismiss() } }
+}
+```
+
+식별 가능한 선택 항목이 있을 때는 불리언과 별도 데이터 대신 `.sheet(item:)`가 안전합니다.
+
+> ⚠️ 하나의 뷰에 같은 종류의 프레젠테이션을 여러 번 흩어 붙이면 어떤 상태가 이겼는지
+> 추적하기 어렵습니다. 화면별 enum 라우트 하나로 통합하거나 관련 버튼 가까이에 배치하세요.
+
+### 4-0-5. `List`, `ForEach`, 삭제와 스와이프
+
+`List`는 스크롤·행 재사용·선택·편집 동작을 제공하는 컨테이너이고 `ForEach`는 데이터를
+여러 View로 변환하는 빌더입니다. React의 `<ul>`과 `array.map()`을 분리해 생각하면 쉽습니다.
+
+```swift
+struct ReadingItem: Identifiable {
+    let id = UUID()
+    var title: String
+    var finished = false
+}
+
+struct ReadingList: View {
+    @State private var items = [
+        ReadingItem(title: "파도 지도"),
+        ReadingItem(title: "작은 행성")
+    ]
+
+    var body: some View {
+        List {
+            Section("읽는 중") {
+                ForEach($items) { $item in
+                    Label(item.title, systemImage: item.finished ? "checkmark.circle.fill" : "book")
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button("완료") { item.finished.toggle() }
+                                .tint(.green)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button("삭제", role: .destructive) { delete(item.id) }
+                        }
+                }
+                .onDelete { items.remove(atOffsets: $0) }
+                .onMove { items.move(fromOffsets: $0, toOffset: $1) }
+            }
+        }
+        .toolbar { EditButton() }
+    }
+
+    private func delete(_ id: UUID) {
+        items.removeAll { $0.id == id }
+    }
+}
+```
+
+> ⚠️ `ForEach(items.indices, id: \.self)`로 편집 가능한 배열을 그리면 삭제 후 인덱스가 바뀌어
+> 잘못된 행 상태가 재사용될 수 있습니다. 모델에 안정적인 `id`를 주고 그 식별자를 쓰세요.
+
+### 4-0-6. 커스텀 수정자와 `@ViewBuilder`
+
+반복되는 스타일을 View extension이나 `ViewModifier`로 묶으면 디자인 규칙을 한곳에서 바꿀 수
+있습니다. React의 공통 컴포넌트·CSS utility를 타입 안전하게 합친 감각입니다.
+
+```swift
+struct CardSurface: ViewModifier {
+    let emphasized: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(emphasized ? Color.accentColor.opacity(0.15) : Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+extension View {
+    func cardSurface(emphasized: Bool = false) -> some View {
+        modifier(CardSurface(emphasized: emphasized))
+    }
+}
+
+struct InfoCard<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            content
+        }
+        .cardSurface()
+    }
+}
+
+InfoCard(title: "여행 메모") {
+    Text("아침 시장은 8시 전에 방문")
+    if Bool.random() { Label("우산 준비", systemImage: "umbrella") }
+}
+```
+
+`@ViewBuilder`는 여러 View 표현식과 제한적인 `if`/`switch`를 하나의 View 결과로 조합하는
+result builder입니다. SwiftUI의 `VStack { ... }` 문법도 같은 원리입니다.
+
+> ⚠️ 수정자 안에 네트워크 요청이나 상태 변경을 숨기지 마세요. 수정자는 모양·행동을 조합하는
+> 도구로 유지하고, 부수 효과는 `.task`나 ViewModel의 이름 있는 메서드로 드러내세요.
+
+### 4-0-7. 애니메이션, 전환, `matchedGeometryEffect`
+
+SwiftUI 애니메이션은 시작·끝 상태만 설명하면 중간 프레임을 보간합니다. React 애니메이션
+라이브러리에서 style state를 바꾸는 것과 비슷하며, 상태 변경을 `withAnimation`으로 감쌉니다.
+
+```swift
+struct RecipeFavoriteView: View {
+    @State private var isFavorite = false
+    @State private var showNote = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                    isFavorite.toggle()
+                    showNote.toggle()
+                }
+            } label: {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .scaleEffect(isFavorite ? 1.25 : 1)
+            }
+
+            if showNote {
+                Text("즐겨찾는 레시피에 추가했습니다.")
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+}
+```
+
+서로 다른 계층에 있는 두 View가 같은 요소처럼 이동하게 하려면 namespace를 공유합니다.
+
+```swift
+@Namespace private var coverSpace
+@State private var expanded = false
+
+if expanded {
+    Image("travel-cover").resizable().matchedGeometryEffect(id: "cover", in: coverSpace)
+} else {
+    Image("travel-cover").resizable().matchedGeometryEffect(id: "cover", in: coverSpace)
+        .frame(width: 80, height: 120)
+}
+```
+
+> ⚠️ `.animation(..., value:)`의 `value`를 생략한 오래된 형태는 하위의 관계없는 변화까지
+> 애니메이션할 수 있습니다. 어떤 상태 변화에 반응하는지 명시하거나 `withAnimation`을 쓰세요.
+
+### 4-0-8. `Codable` 중첩 모델과 날짜 전략
+
+JSON 구조가 중첩되어 있으면 Swift 모델도 같은 계층으로 표현하는 것이 가장 단순합니다.
+JS의 `JSON.parse()`와 달리 타입·키·날짜 형식이 맞지 않으면 decode 시점에 명확히 실패합니다.
+
+```swift
+struct TripArchive: Codable {
+    struct Stop: Codable, Identifiable {
+        let id: UUID
+        let city: String
+        let visitedAt: Date
+    }
+
+    let ownerName: String
+    let stops: [Stop]
+
+    enum CodingKeys: String, CodingKey {
+        case ownerName = "owner_name"
+        case stops
+    }
+}
+
+let decoder = JSONDecoder()
+decoder.dateDecodingStrategy = .iso8601
+let archive = try decoder.decode(TripArchive.self, from: data)
+
+let encoder = JSONEncoder()
+encoder.dateEncodingStrategy = .iso8601
+encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+let savedData = try encoder.encode(archive)
+```
+
+서버 날짜가 초 단위 숫자면 `.secondsSince1970`, 밀리초면 `.millisecondsSince1970`을 사용합니다.
+임의 포맷은 `.formatted(DateFormatter)`로 맞출 수 있지만 포맷터 생성 비용 때문에 재사용하세요.
+
+```swift
+do {
+    _ = try decoder.decode(TripArchive.self, from: data)
+} catch let DecodingError.keyNotFound(key, context) {
+    print("누락 키: \(key.stringValue), 경로: \(context.codingPath)")
+} catch {
+    print("디코딩 실패: \(error)")
+}
+```
+
+> ⚠️ `try? decoder.decode(...)`만 쓰면 서버 스키마가 바뀌어도 단지 nil로 보여 원인을 잃습니다.
+> 개발 중에는 `DecodingError`를 로그로 남기고 사용자 화면에서만 친절한 메시지로 바꾸세요.
+
+### 4-0-9. `UserDefaults`와 `@AppStorage`
+
+작은 설정 값은 UserDefaults에 저장합니다. 브라우저의 localStorage와 비슷하지만 Bool·Int·Data 등
+기본 타입을 직접 다루며, 비밀번호·대용량 모델·관계형 데이터 저장소는 아닙니다.
+
+```swift
+struct ReaderSettingsView: View {
+    @AppStorage("reader.fontScale") private var fontScale = 1.0
+    @AppStorage("reader.keepScreenOn") private var keepScreenOn = false
+
+    var body: some View {
+        Form {
+            Slider(value: $fontScale, in: 0.8...1.6, step: 0.1) {
+                Text("글자 배율")
+            }
+            Toggle("읽는 동안 화면 켜기", isOn: $keepScreenOn)
+        }
+    }
+}
+
+enum SettingsKey {
+    static let lastBookID = "reader.lastBookID"
+}
+
+UserDefaults.standard.set("B-104", forKey: SettingsKey.lastBookID)
+let lastID = UserDefaults.standard.string(forKey: SettingsKey.lastBookID)
+```
+
+작은 `Codable` 값은 `Data`로 인코딩할 수 있지만 목록이 커지거나 검색·정렬이 필요하면
+SwiftData를 사용하세요.
+
+```swift
+let preferences = ["소설", "여행"]
+let data = try JSONEncoder().encode(preferences)
+UserDefaults.standard.set(data, forKey: "reader.categories")
+```
+
+> ⚠️ UserDefaults는 암호화 저장소가 아닙니다. 토큰·비밀번호는 Keychain에 저장하세요.
+> 또 값을 매 프레임 쓰는 용도로 사용하지 말고 의미 있는 설정 변경 시점에만 갱신하세요.
+
+### 4-0-10. `ScrollView`, lazy 컨테이너, `GeometryReader`
+
+`ScrollView`는 임의 레이아웃을 스크롤하게 하고, `LazyVStack`/`LazyVGrid`는 보이는 항목 주변만
+생성합니다. 웹의 overflow container + virtualized list 조합과 비슷합니다.
+
+```swift
+struct BookShelfGrid: View {
+    let titles = (1...100).map { "도서 \($0)" }
+    let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(titles, id: \.self) { title in
+                    Text(title)
+                        .frame(maxWidth: .infinity, minHeight: 100)
+                        .cardSurface()
+                }
+            }
+            .padding()
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+}
+```
+
+부모가 제안한 실제 크기를 읽어 비율 기반 UI를 만들 때만 `GeometryReader`를 사용합니다.
+
+```swift
+GeometryReader { proxy in
+    let width = proxy.size.width
+    ZStack(alignment: .leading) {
+        Capsule().fill(.quaternary)
+        Capsule().fill(.blue).frame(width: width * 0.65)
+    }
+}
+.frame(height: 12)                     // 바깥에서 높이를 제한
+```
+
+> ⚠️ `GeometryReader`는 가능한 모든 공간을 차지하려 합니다. 단순 중앙 정렬이나 화면 너비
+> 확보에 남용하면 레이아웃이 커집니다. 먼저 `frame`, `containerRelativeFrame`, 스택 정렬을 쓰세요.
+
+### 4-0-11. 이미지, 그라디언트, 도형과 제스처
+
+에셋 이미지는 해상도별 파일 대신 Assets의 단일 이름으로 읽고, SF Symbols는 시스템 스타일과
+접근성 크기에 자동 적응합니다. 원격 이미지는 `AsyncImage`의 모든 상태를 처리하세요.
+
+```swift
+struct RecipeHero: View {
+    let url: URL?
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .empty:
+                ProgressView()
+            case .success(let image):
+                image.resizable().scaledToFill()
+            case .failure:
+                Image(systemName: "fork.knife").font(.largeTitle)
+            @unknown default:
+                EmptyView()
+            }
+        }
+        .frame(height: 220)
+        .frame(maxWidth: .infinity)
+        .background(LinearGradient(colors: [.orange.opacity(0.3), .pink.opacity(0.2)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing))
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { markFavorite() }
+    }
+
+    private func markFavorite() { }
+}
+```
+
+드래그·확대·회전처럼 값이 연속으로 바뀌는 제스처는 `@GestureState`로 일시 상태를 보관하고,
+끝났을 때 영구 `@State`에 반영합니다. 단순 실행은 `Button`이 접근성·키보드 지원 면에서 낫습니다.
+
+> ⚠️ `scaledToFill()`은 프레임 밖으로 넘칠 수 있어 `.clipped()` 또는 `clipShape`가 필요합니다.
+> 또 URL별 메모리/디스크 캐시 정책을 세밀하게 제어해야 하면 전용 이미지 로더를 두세요.
+
+### 4-0-12. 타이머, `onReceive`, 햅틱
+
+주기적 UI 갱신은 Combine 타이머를 구독하거나 async 루프를 사용합니다. `onReceive`는 React에서
+외부 event emitter를 구독하는 효과와 비슷하고, View가 사라지면 구독도 정리됩니다.
+
+```swift
+import Combine
+
+struct ReadingTimerView: View {
+    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var seconds = 0
+    @State private var isRunning = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text(Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond)))
+                .font(.system(.largeTitle, design: .monospaced))
+
+            Button(isRunning ? "일시 정지" : "시작") {
+                isRunning.toggle()
+            }
+        }
+        .onReceive(ticker) { _ in
+            guard isRunning else { return }
+            seconds += 1
+        }
+        .sensoryFeedback(.selection, trigger: isRunning)
+        .sensoryFeedback(.success, trigger: seconds >= 1_500)
+    }
+}
+```
+
+명령형 햅틱이 필요한 구버전·UIKit 경계에서는 `UIImpactFeedbackGenerator`를 사용할 수 있습니다.
+
+```swift
+let generator = UIImpactFeedbackGenerator(style: .medium)
+generator.prepare()
+generator.impactOccurred()
+```
+
+> ⚠️ 타이머는 정확한 스케줄러가 아니며 앱이 백그라운드에 가면 멈출 수 있습니다.
+> 경과 시간을 tick 횟수로만 계산하지 말고 시작 `Date`와 현재 시각의 차이로 복원하세요.
+> 햅틱은 시뮬레이터에서 느낄 수 없으므로 실기기에서 확인하고 과도한 반복을 피하세요.
+
+### 4-0-13. `Path`, `Shape`, 그리기와 렌더링 효과
+
+기본 도형으로 표현할 수 없는 차트·배지·장식은 `Path`로 선을 그리고, 재사용할 모양은
+`Shape`로 만듭니다. 웹의 SVG path와 비슷하지만 SwiftUI 레이아웃과 애니메이션에 참여합니다.
+
+```swift
+struct BookmarkShape: Shape {
+    var notch: CGFloat
+
+    var animatableData: CGFloat {
+        get { notch }
+        set { notch = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - notch))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct ReadingBadge: View {
+    @State private var deepNotch = false
+
+    var body: some View {
+        BookmarkShape(notch: deepNotch ? 42 : 18)
+            .fill(.blue.gradient)
+            .overlay { Image(systemName: "book.fill").foregroundStyle(.white) }
+            .frame(width: 80, height: 110)
+            .shadow(color: .blue.opacity(0.25), radius: 8, y: 4)
+            .onTapGesture {
+                withAnimation(.spring) { deepNotch.toggle() }
+            }
+    }
+}
+```
+
+`stroke(style:)`은 선 끝·점선을 제어하고, `trim(from:to:)`는 진행률 원호를 만들 때 유용합니다.
+`Canvas`는 입자가 많거나 반복 그리기가 많은 2D 그래픽에서 View 수를 줄여줍니다.
+
+```swift
+Circle()
+    .trim(from: 0, to: 0.72)
+    .stroke(.mint, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+    .rotationEffect(.degrees(-90))
+    .drawingGroup()                     // 필요할 때만 오프스크린 렌더링
+```
+
+> ⚠️ `drawingGroup()`과 blur·blend mode는 GPU 메모리와 오프스크린 패스를 늘립니다.
+> 보기 좋다는 이유로 모든 카드에 붙이지 말고 Instruments로 측정한 뒤 사용하세요.
+
+### 4-0-14. 적응형 레이아웃, 정렬, 앱 생명주기
+
+SwiftUI는 부모가 크기를 제안하고 자식이 필요한 크기를 답하는 방식입니다. CSS breakpoint를
+직접 복제하기보다 `ViewThatFits`, `layoutPriority`, 크기 클래스처럼 의도를 표현하세요.
+
+```swift
+struct ExpenseSummaryBar: View {
+    let total: Int
+
+    var content: some View {
+        Group {
+            Label("이번 달", systemImage: "calendar")
+            Spacer()
+            Text(total, format: .currency(code: "KRW"))
+                .fontWeight(.bold)
+                .layoutPriority(1)
+        }
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack { content }
+            VStack(alignment: .leading) { content }
+        }
+        .padding()
+    }
+}
+```
+
+복잡한 반복 배치는 `Layout` 프로토콜로 컨테이너를 만들 수 있고, 특수 정렬은
+`alignmentGuide`로 같은 축의 기준점을 맞춥니다. 단순 화면은 스택·Grid를 먼저 사용하세요.
+
+앱이 활성/비활성/백그라운드로 바뀌는 시점은 environment의 `scenePhase`로 관찰합니다.
+
+```swift
+@Environment(\.scenePhase) private var scenePhase
+@State private var draft = ""
+
+TextEditor(text: $draft)
+    .onChange(of: scenePhase) { _, phase in
+        if phase == .background {
+            saveDraft(draft)
+        }
+    }
+
+func saveDraft(_ text: String) { }
+```
+
+> ⚠️ `onDisappear`는 앱이 강제 종료될 때 호출된다고 보장할 수 없습니다. 중요한 초안은
+> 값이 바뀔 때 디바운스 저장하고, `scenePhase` 처리는 마지막 안전망으로 두세요.
+
+### 4-0-15. 탭, 메뉴, 로컬 알림과 Core ML 입구
+
+독립된 최상위 영역은 `TabView`, 행의 보조 작업은 `contextMenu`, 정해진 시각의 기기 알림은
+UserNotifications가 담당합니다. 각각 웹의 하단 라우터, 우클릭 메뉴, Notifications API에 대응합니다.
+
+```swift
+struct TravelRootView: View {
+    @State private var selectedTab = "plans"
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            Text("여행 계획")
+                .tabItem { Label("계획", systemImage: "map") }
+                .tag("plans")
+
+            Text("저장한 장소")
+                .tabItem { Label("저장", systemImage: "bookmark") }
+                .tag("saved")
+                .badge(3)
+        }
+    }
+}
+
+Text("야시장")
+    .contextMenu {
+        Button("일정에 복사", systemImage: "doc.on.doc") { }
+        Button("삭제", systemImage: "trash", role: .destructive) { }
+    }
+```
+
+```swift
+import UserNotifications
+
+func scheduleTripReminder() async throws {
+    let center = UNUserNotificationCenter.current()
+    guard try await center.requestAuthorization(options: [.alert, .sound]) else { return }
+
+    let content = UNMutableNotificationContent()
+    content.title = "여행 준비 확인"
+    content.body = "여권과 충전기를 확인하세요."
+    let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3_600, repeats: false)
+    try await center.add(UNNotificationRequest(identifier: "trip-check", content: content, trigger: trigger))
+}
+```
+
+Create ML로 만든 `.mlmodel`을 프로젝트에 넣으면 Xcode가 Swift 입력·출력 타입을 생성합니다.
+이미지·텍스트 전처리는 모델마다 다르므로 생성된 클래스의 Prediction 탭을 기준으로 호출하세요.
+
+```swift
+// 예: 프로젝트에 SpendingCategory.mlmodel을 추가해 생성된 타입이라는 가정
+import CoreML
+
+let model = try SpendingCategory(configuration: MLModelConfiguration())
+let prediction = try model.prediction(note: "공항철도 왕복")
+print(prediction.label)
+```
+
+> ⚠️ 알림 권한은 앱 시작 직후가 아니라 사용자가 “알림 받기”를 선택한 맥락에서 요청하세요.
+> ML 모델 파일명·입력 타입은 모델마다 달라 예제 이름을 그대로 복사하지 말고 생성 코드를 확인하세요.
+
+### 4-0-16. 지도, 파일, 생체 인증, QR 코드
+
+장소 기반 앱은 MapKit, 앱 전용 파일은 `FileManager`, 잠금 해제는 LocalAuthentication을 씁니다.
+모두 시뮬레이터와 실기기 동작 차이가 있으므로 화면 로직과 서비스 코드를 분리하세요.
+
+```swift
+import MapKit
+
+struct Place: Identifiable {
+    let id = UUID()
+    let name: String
+    let coordinate: CLLocationCoordinate2D
+}
+
+struct TripMapView: View {
+    @State private var camera: MapCameraPosition = .region(.init(
+        center: CLLocationCoordinate2D(latitude: 35.6812, longitude: 139.7671),
+        span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)
+    ))
+    let places = [Place(name: "중앙역", coordinate: .init(latitude: 35.6812, longitude: 139.7671))]
+
+    var body: some View {
+        Map(position: $camera) {
+            ForEach(places) { place in
+                Marker(place.name, coordinate: place.coordinate)
+            }
+            UserAnnotation()
+        }
+        .mapControls { MapCompass(); MapScaleView() }
+    }
+}
+```
+
+```swift
+import LocalAuthentication
+
+func unlockPrivateNotes() async throws -> Bool {
+    let context = LAContext()
+    var error: NSError?
+    guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else { return false }
+    return try await context.evaluatePolicy(
+        .deviceOwnerAuthentication,
+        localizedReason: "비공개 여행 메모를 열기 위해 인증합니다."
+    )
+}
+
+func saveExport(_ data: Data) throws -> URL {
+    let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    let url = folder.appending(path: "trip-export.json")
+    try data.write(to: url, options: .atomic)
+    return url
+}
+```
+
+QR 코드는 Core Image의 `CIQRCodeGenerator` 필터로 만들고 `ImageRenderer` 또는 `CIContext`로
+이미지화할 수 있습니다. 입력은 UTF-8 `Data`이며 확대할 때 보간을 끄면 모서리가 선명합니다.
+
+> ⚠️ 현재 위치를 표시하려면 Info 설정과 위치 권한 요청이 별도로 필요합니다. Face ID 문구도
+> `NSFaceIDUsageDescription`에 구체적으로 적으세요. 문서 폴더 파일을 UI 스레드에서 크게 읽지 말고,
+> QR에는 비밀값을 평문으로 넣지 마세요—누구나 카메라로 읽을 수 있습니다.
+
 ## 4-1. 디버깅 / 로그
 
 ```swift
@@ -2328,6 +3478,9 @@ File → New → File → App Privacy  (PrivacyInfo.xcprivacy)
 | 6 | Landmarks 튜토리얼 Part 1~2 | 1시간 |
 
 **총 6~9시간**
+
+> **보강 학습**: 자기완결 학습을 원하면 PART 1 직후 PART 1.5를, 샘플 앱을 마친 뒤
+> PART 4의 4-0을 이어서 읽으세요. 빠른 실행만 목표인 경우에는 필요한 절부터 찾아봐도 됩니다.
 
 **근거**: AI가 STEP 2~4 수준 코드는 직접 써줍니다. 대신 **프로퍼티 래퍼 선택**과
 **컴파일 에러 읽기**는 사용자가 판단해야 하는 영역이라 여기에 시간을 쓰는 게 효율적입니다.

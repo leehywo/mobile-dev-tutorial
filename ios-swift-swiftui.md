@@ -2897,7 +2897,7 @@ logger.info("도시: \(city, privacy: .public)")     // 명시해야 로그에 �
 <string>현재 위치의 날씨를 보여주기 위해 필요합니다.</string>
 
 <key>NSUserTrackingUsageDescription</key>
-<string>맞춤형 광고를 제공하기 위해 필요합니다.</string>
+<string>여러 앱과 웹사이트에서의 활동을 연결해 개인화 기능을 제공하기 위해 필요합니다.</string>
 ```
 
 > 🚨 **설명 문구 없이 권한을 요청하면 앱이 즉시 크래시합니다.** 그리고 App Store 심사에서
@@ -2931,57 +2931,159 @@ case .denied, .restricted:
 2. **요청 전에 이유를 설명하는 화면을 먼저** 보여주기 (한 번 거부하면 다시 못 물어봅니다)
 3. **권한이 필요 없는 대안 우선** — PhotosPicker(권한 불필요) > 사진 라이브러리 전체 접근
 
-## 4-3. AdMob (광고 수익화)
+> `NSUserTrackingUsageDescription`과 ATT는 **앱이나 제3자 SDK가 다른 회사의 앱·웹사이트에 걸쳐
+> 사용자를 추적할 때만** 필요합니다. 광고 SDK를 쓰더라도 추적하지 않으면 무조건 요청하는 권한이
+> 아닙니다. 필요하다면 기능 가치를 설명한 뒤 요청하고, 거부해도 핵심 기능은 그대로 제공하세요.
 
-**1단계: SPM으로 SDK 추가**
-```
-Xcode → File → Add Package Dependencies
-URL: https://github.com/googleads/swift-package-manager-google-mobile-ads
-```
+## 4-3. 인앱 결제와 구독 (수익화)
 
-**2단계: Info.plist**
-```xml
-<key>GADApplicationIdentifier</key>
-<string>ca-app-pub-3940256099942544~1458002511</string>  <!-- 테스트 ID -->
+StoreKit 2는 별도 패키지 없이 iOS에 들어 있습니다. App Store Connect에서 일회성 상품
+`premium_theme`와 자동 갱신 구독 `pro_monthly`를 만든 뒤, 상품 ID를 코드와 정확히 맞추세요.
 
-<key>NSUserTrackingUsageDescription</key>
-<string>맞춤형 광고를 제공하기 위해 필요합니다.</string>
-```
+React의 결제 상태 store처럼 `@Observable` 모델 하나가 상품·구매 권한을 관리하면 편합니다.
 
-**3단계: 초기화**
 ```swift
-import GoogleMobileAds
-import AppTrackingTransparency
+import SwiftUI
+import Observation
+import StoreKit
 
-@main
-struct MyApp: App {
+@MainActor @Observable
+final class StoreModel {
+    private let productIDs = ["premium_theme", "pro_monthly"]
+    private(set) var products: [Product] = []
+    private(set) var entitledProductIDs: Set<String> = []
+    private var updates: Task<Void, Never>?
+
     init() {
+        // ⭐ 구매 요청보다 먼저 등록. 앱 밖에서 끝난 거래도 놓치지 않습니다.
+        updates = listenForTransactions()
         Task {
-            // ⭐ ATT 권한을 먼저 물어본 뒤 AdMob을 시작해야 IDFA를 받습니다
-            _ = await ATTrackingManager.requestTrackingAuthorization()
-            MobileAds.shared.start()
+            await loadProducts()
+            await refreshEntitlements()
         }
     }
-    var body: some Scene { WindowGroup { ContentView() } }
+
+    deinit { updates?.cancel() }
+
+    func loadProducts() async {
+        do {
+            products = try await Product.products(for: productIDs)
+        } catch {
+            products = [] // UI에 재시도 버튼과 오류 메시지를 표시
+        }
+    }
+
+    func purchase(_ product: Product) async throws {
+        switch try await product.purchase() {
+        case .success(let result):
+            let transaction = try checkVerified(result)
+            grant(productID: transaction.productID) // ⭐ transaction.id가 아님
+            await transaction.finish()
+        case .pending:
+            break // Ask to Buy 등: Transaction.updates가 나중에 완료를 전달
+        case .userCancelled:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    private func listenForTransactions() -> Task<Void, Never> {
+        Task { [weak self] in
+            for await update in Transaction.updates {
+                do {
+                    let transaction = try self?.checkVerified(update)
+                    if let transaction {
+                        self?.grant(productID: transaction.productID)
+                        await transaction.finish()
+                    }
+                } catch { /* 검증 실패 기록; entitlement 지급 금지 */ }
+            }
+        }
+    }
+
+    private nonisolated func checkVerified<T>(
+        _ result: VerificationResult<T>
+    ) throws -> T {
+        switch result {
+        case .verified(let value): return value
+        case .unverified(_, let error): throw error
+        }
+    }
+
+    private func grant(productID: String) {
+        guard productIDs.contains(productID) else { return }
+        entitledProductIDs.insert(productID)
+    }
 }
 ```
 
-> ⚠️ **SDK 버전에 따라 타입 이름이 다릅니다.**
-> - 구버전(11.x 이하): Objective-C 이름 그대로 — `GADMobileAds.sharedInstance().start()`,
->   `GADInterstitialAd`, `GADBannerView`, `GADRequest`
-> - 신버전(12.x~): Swift 친화적 이름 — `MobileAds.shared.start()`, `InterstitialAd`, `BannerView`
->
-> **본인이 설치한 버전의 공식 샘플을 기준으로 삼으세요.** 인터넷 예제가 뒤섞여 있어
-> 컴파일 에러의 흔한 원인입니다.
+⚠️ **항상 `productID`로 매핑하세요.** `Transaction.id`는 거래마다 달라지는 거래 ID입니다.
+이를 상품 키로 쓰면 결제는 성공했는데 프리미엄 기능이 안 열리는 버그가 납니다.
 
-> 🚨 **테스트 ID를 반드시 사용** (`ca-app-pub-3940256099942544/...`).
-> 본인 광고를 클릭하면 AdMob 계정이 **영구 정지**됩니다.
->
-> 🚨 **ATT는 iOS에서 특히 중요**합니다. 사용자가 거부하면 IDFA를 못 받아 eCPM이 크게 떨어집니다.
-> 요청 타이밍(첫 실행 직후 vs 가치를 경험한 후)에 따라 동의율이 2~3배 차이 납니다.
+현재 권한은 앱 시작, 포그라운드 복귀, 복원 후에 다시 계산합니다. 만료·취소·환불된 거래를
+제외하도록 `Transaction.currentEntitlements`를 진실의 원천으로 삼으세요.
 
-→ 공식 샘플: [googleads/googleads-mobile-ios-examples](https://github.com/googleads/googleads-mobile-ios-examples)
-— Swift + SwiftUI 통합 예제 포함.
+```swift
+extension StoreModel {
+    func refreshEntitlements() async {
+        var active: Set<String> = []
+        for await result in Transaction.currentEntitlements {
+            guard case .verified(let transaction) = result,
+                  transaction.revocationDate == nil,
+                  productIDs.contains(transaction.productID) else { continue }
+            active.insert(transaction.productID)
+        }
+        entitledProductIDs = active
+    }
+
+    func restore() async throws {
+        try await AppStore.sync() // 사용자 동작(복원 버튼)에서만 호출
+        await refreshEntitlements()
+    }
+
+    func subscriptionStatus(for product: Product) async throws
+        -> [Product.SubscriptionInfo.Status] {
+        try await product.subscription?.status ?? []
+    }
+}
+```
+
+```swift
+struct PaywallView: View {
+    @Environment(StoreModel.self) private var store
+    @State private var showManageSubscriptions = false
+
+    var body: some View {
+        VStack {
+            ForEach(store.products) { product in
+                Button("\(product.displayName) · \(product.displayPrice)") {
+                    Task { try? await store.purchase(product) }
+                }
+            }
+            Button("구매 복원") { Task { try? await store.restore() } }
+            Button("구독 관리") { showManageSubscriptions = true }
+        }
+        .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
+    }
+}
+```
+
+### 테스트와 심사 체크리스트
+
+- Xcode에서 `File → New → StoreKit Configuration File`로 로컬 `.storekit` 파일을 만들고
+  Scheme → Run → StoreKit Configuration에 연결하세요. 구매·갱신·만료·환불·Ask to Buy를 시뮬레이션합니다.
+- 실제 App Store Connect 상품은 **Sandbox Apple Account**와 실기기/TestFlight로 확인하세요.
+- ⚠️ 구매 리스너는 구매 요청 **전에** 등록하세요. 앱이 백그라운드인 동안 끝난 거래도 처리해야 합니다.
+- ⚠️ 눈에 보이는 **구매 복원** 버튼은 필수입니다. 없으면 App Store 심사에서 리젝될 수 있습니다.
+- ⚠️ 환불·취소는 App Store Server Notifications 또는 시작/복귀 때 재검증해 entitlement를 회수하세요.
+- ⚠️ 가격은 `displayPrice`처럼 StoreKit이 준 현지화 문자열만 표시하세요. 가격 하드코딩은
+  지역별 세금·통화와 어긋나며 App Store 심사 지침 2.3.7 문제로 이어질 수 있습니다.
+- ⭐ 정직한 페이월: 무료/유료 기능, 구독 기간·자동 갱신을 명확히 쓰고 가짜 타이머,
+  닫기 숨김, 고가 플랜 강제 선택 같은 다크패턴을 쓰지 마세요.
+
+→ 공식 문서: [StoreKit 인앱 구매 흐름](https://developer.apple.com/documentation/storekit/offering-completing-and-restoring-in-app-purchases),
+[Xcode에서 인앱 구매 테스트](https://developer.apple.com/documentation/storekit/testing-in-app-purchases-in-xcode)
 
 ## 4-4. 코드 서명 & 아카이브
 
@@ -3397,7 +3499,7 @@ File → New → File → App Privacy  (PrivacyInfo.xcprivacy)
 | STEP 2 (리스트) | Landmarks Part 4: Building Lists and Navigation |
 | STEP 3 (ViewModel·네비) | Food Truck (NavigationStack + @Observable) |
 | STEP 4 (저장) | Backyard Birds / Food Truck의 SwiftData 파트 |
-| 4-3 AdMob | googleads-mobile-ios-examples |
+| 4-3 인앱 결제·구독 | StoreKit 공식 구매 흐름 / Backyard Birds의 IAP 구성 |
 
 **학습 팁:**
 1. **WWDC 세션 영상이 최고의 교재**입니다. developer.apple.com/videos 에서

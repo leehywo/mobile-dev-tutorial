@@ -16,7 +16,7 @@
 - PART 1: 멘탈 모델 — 아는 것 vs 달라지는 것
 - PART 2: React(웹) → RN 매핑 치트시트
 - PART 3: 샘플 앱 4종 만들기 (카운터 → 할일 → 날씨 → 메모)
-- PART 4: 실전 (디버깅·권한·광고·출시)
+- PART 4: 실전 (디버깅·권한·인앱결제/구독·출시)
 - PART 5: React 개발자가 자주 밟는 지뢰 10가지
 - 부록: 다음 단계 & 리소스
 
@@ -630,32 +630,136 @@ export const t = (k: keyof typeof S) => S[k][LANG];
 > 🪤 **iOS 함정**: `app.json`의 `ios.infoPlist.CFBundleLocalizations: ["en","ko"]`를 선언하지 않으면, 한국어 폰에서도 앱은 영어로 뜹니다(OS가 "지원 언어"로 교집합하기 때문). 다국어 앱은 이 선언 필수.
 > 단순 문자열 표는 위처럼 직접 만들어도 되고, 규모가 커지면 `i18next` + `expo-localization` 사용.
 
-## 4-4. AdMob (광고 수익화)
+## 4-4. 인앱 결제와 구독 (수익화)
+
+Expo Go에는 스토어 결제 네이티브 코드가 없으므로 **development build/EAS build**가 필요합니다.
+여기서는 OpenIAP 형태로 iOS·Android 차이를 감싸는 `expo-iap`을 사용합니다.
 
 ```bash
-npx expo install react-native-google-mobile-ads
+npx expo install expo-iap
+npx expo prebuild   # 또는 EAS development build 생성
 ```
 
-```jsonc
-// app.json (plugins)
-["react-native-google-mobile-ads", {
-  "androidAppId": "ca-app-pub-xxx~yyy",
-  "iosAppId": "ca-app-pub-xxx~zzz"
-}]
-```
+App Store Connect와 Play Console에서 상품을 먼저 만드세요. 플랫폼별 SKU가 달라도 괜찮지만,
+코드 곳곳에 문자열을 흩뿌리지 말고 한곳에서 의미가 같은 상품끼리 매핑합니다.
 
 ```tsx
-// 배너 예
-import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
-// 개발/테스트는 반드시 테스트 ID (실광고 자가클릭 = 계정정지)
-const unitId = __DEV__ ? TestIds.BANNER : '실광고_단위_ID';
-<BannerAd unitId={unitId} size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER} />
+import { Platform } from 'react-native';
+
+const SKU = {
+  premium: Platform.select({
+    ios: 'premium_theme_ios',
+    android: 'premium_theme_android',
+  })!,
+  monthly: Platform.select({
+    ios: 'pro_monthly_ios',
+    android: 'pro_monthly_android',
+  })!,
+} as const;
+
+const PRODUCT_BY_ID = new Map([
+  [SKU.premium, 'premium'],
+  [SKU.monthly, 'monthly'],
+] as const);
 ```
 
-핵심 규칙:
-- **개발/내부테스트 = 테스트 광고, 정식 출시만 실광고.** 본인이 실광고 누르면 AdMob 계정 정지.
-- iOS는 **ATT 권한**(App Tracking Transparency) 문구·요청 필요.
-- 게임 중 강제 전면광고는 리텐션·리뷰 킬러 — 절제(보상형/배너 위주) 권장.
+⭐ 웹의 `onClick` 응답만 기다리면 안 됩니다. 네이티브 결제창 동안 앱이 백그라운드로 갔다가
+돌아올 수 있으므로 **성공 리스너를 먼저 등록**하고 그 뒤에 구매를 요청합니다. `useIAP`의 콜백은
+컴포넌트 마운트 때 등록됩니다.
+
+```tsx
+import { useEffect } from 'react';
+import { Button, Text, View } from 'react-native';
+import { useIAP, type Purchase } from 'expo-iap';
+
+async function verifyOnServer(purchase: Purchase) {
+  // 영수증/purchaseToken을 서버가 Apple/Google API로 검증
+  return true;
+}
+
+export function Paywall() {
+  const {
+    connected,
+    products,
+    fetchProducts,
+    requestPurchase,
+    finishTransaction,
+    getAvailablePurchases,
+    availablePurchases,
+  } = useIAP({
+    // ⭐ requestPurchase보다 먼저 등록되는 구매 리스너
+    onPurchaseSuccess: async (purchase) => {
+      const entitlement = PRODUCT_BY_ID.get(purchase.productId);
+      if (!entitlement) return; // transactionId 등 다른 id로 찾지 말 것
+
+      if (await verifyOnServer(purchase)) {
+        await grantEntitlement(entitlement);
+        await finishTransaction({ purchase, isConsumable: false });
+      }
+    },
+    onPurchaseError: (error) => console.warn(error),
+  });
+
+  useEffect(() => {
+    if (!connected) return;
+    // 최신 expo-iap은 fetchProducts로 통합. 구버전의 getProducts/getSubscriptions에 해당합니다.
+    fetchProducts({ skus: [SKU.premium, SKU.monthly], type: 'all' });
+    getAvailablePurchases(); // 시작할 때도 현재 소유권 재확인
+  }, [connected, fetchProducts, getAvailablePurchases]);
+
+  useEffect(() => {
+    void reconcileEntitlements(availablePurchases);
+  }, [availablePurchases]);
+
+  const buy = (productId: string) => requestPurchase({
+    request: {
+      apple: { sku: productId },
+      google: { skus: [productId] },
+    },
+  });
+
+  return (
+    <View>
+      {products.map(product => (
+        <View key={product.id}>
+          <Text>{product.title}</Text>
+          <Text>{product.displayPrice}</Text>
+          <Button title="구매" onPress={() => buy(product.id)} />
+        </View>
+      ))}
+      <Button title="구매 복원" onPress={() => getAvailablePurchases()} />
+    </View>
+  );
+}
+```
+
+Android 구독에서 여러 base plan/offer가 반환되면 사용자가 선택한 항목의 `offerToken`을
+Google 요청에 함께 넘겨야 합니다. 정확한 필드 형태는 설치한 `expo-iap` 버전의 타입과 문서를
+기준으로 하세요. `react-native-iap`도 흐름은 `initConnection` → `getProducts/getSubscriptions` →
+리스너 → `requestPurchase` → 검증 → `finishTransaction`으로 같습니다.
+
+### 출시 전에 반드시 확인
+
+- ⚠️ **`productId`로 매핑하세요.** `purchase.id`/`transactionId`/purchase token은 거래 식별자입니다.
+  이것으로 기능을 찾으면 “결제했는데 안 열림” 버그가 납니다.
+- ⚠️ 구매 리스너는 구매 요청 **전에** 등록하세요. 화면 이동으로 Paywall이 사라져도 앱 최상위의
+  IAP provider/모델은 살아 있도록 구성하는 편이 안전합니다.
+- ⚠️ **구매 복원** 버튼을 눈에 보이게 두세요. 없으면 App Store 심사에서 리젝될 수 있습니다.
+- ⚠️ `finishTransaction`은 서버 검증과 혜택 지급 뒤 호출하세요. Android에서는 이것이 acknowledge를
+  포함하며, 누락하면 **3일 후 자동 환불**됩니다.
+- ⚠️ 환불·취소·만료는 App Store Server Notifications/Google RTDN 또는 앱 시작·복귀 시
+  서버 재검증으로 entitlement를 회수하세요. 리스너만으로 Android의 앱 종료 중 갱신을 알 수 없습니다.
+- ⚠️ iOS는 Sandbox 계정과 StoreKit 설정 파일로, Android는 Play 라이선스 테스터로 테스트합니다.
+  Android 상품은 **Play 스토어에서 설치한 테스트 빌드**에서 확인하세요. 사이드로드 APK는
+  서명/설치 경로 불일치로 상품 배열이 빈 값일 수 있습니다.
+- ⚠️ 가격은 `displayPrice` 등 스토어가 준 현지화 문자열을 쓰세요. 하드코딩 가격은 지역별
+  통화·세금과 어긋나고 App Store 심사 지침 2.3.7 문제로 이어질 수 있습니다.
+- ⭐ 정직한 페이월에는 무료/유료 기능, 구독 기간과 자동 갱신을 명확히 표시합니다.
+  가짜 타이머, 닫기 숨김, 고가 플랜 미리 선택 같은 다크패턴은 쓰지 마세요.
+
+→ 문서: [Expo IAP](https://hyochan.github.io/expo-iap/),
+[Apple StoreKit 테스트](https://developer.apple.com/documentation/storekit/testing-in-app-purchases-in-xcode),
+[Google Play Billing 테스트](https://developer.android.com/google/play/billing/test)
 
 ## 4-5. 빌드 & 출시 (EAS)
 
@@ -677,7 +781,7 @@ eas submit -p android --latest
 eas submit -p ios --latest
 ```
 
-- `eas.json`의 **profile**로 환경 분기(개발/테스트/프로덕션) — 광고 ID·API 키 등.
+- `eas.json`의 **profile**로 환경 분기(개발/테스트/프로덕션) — API URL·기능 플래그 등.
 - **OTA 업데이트**: JS만 바뀐 수정은 `eas update`로 스토어 재심사 없이 즉시 배포(네이티브 변경은 재빌드 필요).
 - 앱 아이콘/스플래시: `app.json`의 `icon`, `splash`. 1024×1024 아이콘 필수.
 
@@ -708,7 +812,7 @@ RN으로 95%가 되지만, 플랫폼 고유 기능(위젯·Live Activity·특정
 
 # 부록: 다음 단계 & 리소스
 
-**여기까지 했으면 할 수 있는 것**: 화면·상태·리스트·폼·API·저장·네비게이션·광고·출시. = 실서비스 앱의 본체.
+**여기까지 했으면 할 수 있는 것**: 화면·상태·리스트·폼·API·저장·네비게이션·인앱결제·출시. = 실서비스 앱의 본체.
 
 **다음 학습 추천**:
 - `@tanstack/react-query` — 서버 상태(웹과 동일)

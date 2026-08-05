@@ -16,7 +16,7 @@
 - PART 1: C# 문법 — TypeScript 개발자의 지름길
 - PART 2: 멘탈 모델 — React vs Unity (가장 중요한 파트!)
 - PART 3: 샘플 4종 만들기 (카운터 → 할일 → 날씨 → 미니 게임)
-- PART 4: 실전 (모바일 빌드·광고·성능)
+- PART 4: 실전 (모바일 빌드·인앱결제/구독·성능)
 - PART 5: React 개발자가 자주 밟는 지뢰
 - 부록: 다음 단계 & 리소스
 
@@ -910,17 +910,127 @@ void Update()
 // 웹의 이벤트 리스너 모델과 비슷해서 오히려 익숙할 겁니다.
 ```
 
-## 4-4. 광고 (수익화)
+## 4-4. 인앱 결제와 구독 (수익화)
 
-```
-선택지:
-1. Unity Ads — 설정이 가장 쉬움 (Unity 대시보드 통합, 게임 광고 특화)
-2. AdMob — Google Mobile Ads Unity 플러그인 (.unitypackage 임포트)
-   → 네이티브/RN 트랙에서 만든 AdMob 계정/광고 단위 그대로 재사용 가능
+Package Manager에서 **In-App Purchasing (`com.unity.purchasing`)**을 설치하고 Services의 IAP를
+활성화합니다. App Store Connect와 Play Console에도 같은 상품을 각각 만들어야 합니다.
+예제는 일회성 `premium_theme`와 월간 구독 `pro_monthly`를 등록합니다.
 
-하이퍼캐주얼 표준 조합: 전면(게임오버 시) + 보상형(이어하기/2배 보상)
-배너는 게임에서는 잘 안 씀 (몰입 해침 + 수익 낮음)
+Unity IAP는 React의 전역 이벤트 provider처럼 앱 시작 때 한 번 초기화합니다. 구매 버튼을 누를 때
+초기화하면 결제 완료 이벤트를 놓칠 수 있습니다.
+
+```csharp
+using UnityEngine;
+using UnityEngine.Purchasing;
+
+public sealed class StoreManager : MonoBehaviour, IStoreListener
+{
+    public const string PremiumTheme = "premium_theme";
+    public const string ProMonthly = "pro_monthly";
+
+    private static StoreManager instance;
+    private IStoreController controller;
+    private IExtensionProvider extensions;
+
+    void Awake()
+    {
+        if (instance != null) { Destroy(gameObject); return; }
+        instance = this;
+        DontDestroyOnLoad(gameObject); // ⭐ 구매 요청 전부터 리스너를 유지
+        InitializePurchasing();
+    }
+
+    void InitializePurchasing()
+    {
+        var module = StandardPurchasingModule.Instance();
+        var builder = ConfigurationBuilder.Instance(module);
+        builder.AddProduct(PremiumTheme, ProductType.NonConsumable);
+        builder.AddProduct(ProMonthly, ProductType.Subscription);
+        UnityPurchasing.Initialize(this, builder);
+    }
+
+    public void OnInitialized(IStoreController c, IExtensionProvider e)
+    {
+        controller = c;
+        extensions = e;
+        RefreshEntitlements();
+    }
+
+    public void Buy(string productId)
+    {
+        controller?.InitiatePurchase(productId);
+    }
+
+    public PurchaseProcessingResult ProcessPurchase(PurchaseEventArgs args)
+    {
+        // ⭐ transactionID가 아니라 definition.id(productId)로 상품을 매핑
+        string productId = args.purchasedProduct.definition.id;
+
+        // 서버에서 영수증 검증 후 실제 프로젝트의 entitlement 저장소에 반영하세요.
+        if (productId == PremiumTheme) UnlockPremiumTheme();
+        else if (productId == ProMonthly) EnableSubscription();
+        else return PurchaseProcessingResult.Complete;
+
+        // 서버 검증이 비동기라면 Pending을 반환하고 검증 성공 후 ConfirmPendingPurchase 호출
+        return PurchaseProcessingResult.Complete;
+    }
+
+    public void OnInitializeFailed(InitializationFailureReason error) { Debug.LogError(error); }
+    public void OnInitializeFailed(InitializationFailureReason error, string message)
+        { Debug.LogError($"{error}: {message}"); }
+    public void OnPurchaseFailed(Product product, PurchaseFailureReason reason)
+        { Debug.LogWarning($"{product.definition.id}: {reason}"); }
+}
 ```
+
+상품명과 가격은 Catalog에 적은 문자열이 아니라 스토어가 돌려준 metadata를 표시합니다.
+
+```csharp
+Product product = controller.products.WithID(StoreManager.ProMonthly);
+priceLabel.text = product.metadata.localizedPriceString; // ⭐ 현지 통화·세금 반영
+titleLabel.text = product.metadata.localizedTitle;
+```
+
+⚠️ **상품 ID(`definition.id`)로 매핑하세요.** `transactionID`나 영수증 속 다른 id는 거래마다
+달라집니다. 이것을 상품 키로 쓰면 결제는 됐는데 아이템이 안 열리는 버그가 납니다.
+
+iOS에는 눈에 보이는 **구매 복원** 버튼을 제공하세요. Android는 초기화 시 소유한 비소모성 상품과
+구독을 자동으로 돌려주지만, 명시적인 복원/재검증 UI를 공통 제공하면 사용자가 이해하기 쉽습니다.
+
+```csharp
+public void RestorePurchases()
+{
+#if UNITY_IOS
+    var apple = extensions.GetExtension<IAppleExtensions>();
+    apple.RestoreTransactions((success, message) => {
+        Debug.Log($"Restore: {success}, {message}");
+        if (success) RefreshEntitlements();
+    });
+#else
+    RefreshEntitlements();
+#endif
+}
+```
+
+### 출시 전에 반드시 확인
+
+- ⚠️ `StoreManager`를 첫 씬에서 생성하고 `DontDestroyOnLoad`로 유지해 구매 요청 **전에** 리스너가
+  준비되게 하세요. 결제 앱으로 전환한 사이 완료된 거래를 놓치면 안 됩니다.
+- ⚠️ iOS **구매 복원** 버튼은 필수입니다. 없으면 App Store 심사에서 리젝될 수 있습니다.
+- ⚠️ 환불·취소·구독 만료는 App Store Server Notifications/Google RTDN 또는 실행·복귀 때
+  서버 영수증 재검증으로 entitlement를 회수하세요. `PlayerPrefs` Boolean은 진실의 원천이 아닙니다.
+- ⚠️ Android 구매 완료는 Unity IAP가 정상 처리/확정하도록 해야 합니다. acknowledge가 누락되면
+  **3일 후 자동 환불**됩니다. 서버 검증 중 `Pending`을 반환했다면 성공 후 반드시 확정하세요.
+- ⚠️ iOS는 Sandbox 계정과 StoreKit 설정 파일, Android는 Play 라이선스 테스터로 시험합니다.
+  Android는 **Play 스토어에서 설치한 테스트 빌드**여야 합니다. 사이드로드 APK는 상품이 비어 보일 수 있습니다.
+- ⚠️ 가격은 `localizedPriceString`을 쓰세요. 하드코딩 가격은 지역 통화·세금과 어긋나고
+  App Store 심사 지침 2.3.7 문제로 이어질 수 있습니다.
+- ⭐ 정직한 페이월에는 무료/유료 콘텐츠, 구독 기간·자동 갱신을 분명히 씁니다.
+  가짜 타이머, 닫기 숨김, 고가 상품 강제 선택 같은 다크패턴은 금지입니다.
+
+→ 공식 문서: [Unity IAP](https://docs.unity3d.com/Manual/UnityIAP.html),
+[Google Play Billing 테스트](https://developer.android.com/google/play/billing/test),
+[StoreKit 테스트](https://developer.apple.com/documentation/storekit/testing-in-app-purchases-in-xcode)
 
 ## 4-5. 성능 기초 (모바일에서 특히 중요)
 

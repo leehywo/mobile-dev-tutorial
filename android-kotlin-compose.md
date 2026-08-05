@@ -1766,40 +1766,135 @@ fun CameraButton() {
 > **Android 13+ 알림 권한**: `POST_NOTIFICATIONS`는 런타임 요청이 필요합니다.
 > 예전 코드를 참고하다 보면 이게 빠져 있어서 "알림이 안 와요" 문제를 만납니다.
 
-## 4-3. AdMob (광고 수익화)
+## 4-3. 인앱 결제와 구독 (수익화)
+
+웹의 결제 버튼은 서버 API를 호출하지만, 앱 안의 디지털 상품은 **Google Play Billing**을 거칩니다.
+Play Console에서 먼저 일회성 상품 `premium_theme`와 구독 `pro_monthly`를 만들고 활성화하세요.
 
 ```kotlin
-// build.gradle.kts
-implementation("com.google.android.gms:play-services-ads:23.6.0")
-implementation("com.google.android.ump:user-messaging-platform:3.0.0")
+// app/build.gradle.kts — 버전은 공식 릴리즈 노트의 최신 안정판으로 맞추세요
+dependencies {
+    implementation("com.android.billingclient:billing-ktx:<latest-version>")
+}
 ```
 
-```xml
-<!-- AndroidManifest.xml -->
-<meta-data
-    android:name="com.google.android.gms.ads.APPLICATION_ID"
-    android:value="ca-app-pub-3940256099942544~3347511713" />  <!-- 테스트 ID -->
-```
+⭐ React의 전역 이벤트 구독처럼 `PurchasesUpdatedListener`를 **구매 버튼보다 먼저** 준비합니다.
 
 ```kotlin
-// Application 클래스에서 초기화
-MobileAds.initialize(context) {}
+class BillingManager(private val context: Context) : PurchasesUpdatedListener {
+    private val billingClient = BillingClient.newBuilder(context)
+        .setListener(this)                 // ⭐ 구매 요청 전에 리스너 등록
+        .enablePendingPurchases(
+            PendingPurchasesParams.newBuilder().enableOneTimeProducts().build()
+        )
+        .enableAutoServiceReconnection()
+        .build()
 
-// 전면광고 로드 → 표시
-InterstitialAd.load(context, adUnitId, AdRequest.Builder().build(), callback)
+    fun connect(onReady: () -> Unit) {
+        billingClient.startConnection(object : BillingClientStateListener {
+            override fun onBillingSetupFinished(result: BillingResult) {
+                if (result.responseCode == BillingClient.BillingResponseCode.OK) onReady()
+            }
+            override fun onBillingServiceDisconnected() = Unit
+        })
+    }
+
+    fun queryProducts() {
+        val products = listOf(
+            QueryProductDetailsParams.Product.newBuilder()
+                .setProductId("premium_theme")
+                .setProductType(BillingClient.ProductType.INAPP)
+                .build(),
+            QueryProductDetailsParams.Product.newBuilder()
+                .setProductId("pro_monthly")
+                .setProductType(BillingClient.ProductType.SUBS)
+                .build()
+        )
+        billingClient.queryProductDetailsAsync(
+            QueryProductDetailsParams.newBuilder().setProductList(products).build()
+        ) { result, response ->
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                // response.productDetailsList를 StateFlow에 넣어 Compose UI 갱신
+            }
+        }
+    }
+}
 ```
 
-> ⚠️ **테스트 ID를 반드시 쓰세요** (`ca-app-pub-3940256099942544/...`).
-> 개발 중에 본인 광고를 클릭하면 **AdMob 계정이 영구 정지**됩니다. 복구 사례가 거의 없습니다.
->
-> ⚠️ **동의 수집(UMP)**: EU/영국 사용자 대상이면 GDPR 동의 화면이 법적으로 필요하고,
-> 없으면 광고 수익이 크게 줄거나 노출이 막힙니다. `user-messaging-platform`으로 처리하세요.
->
-> ⚠️ **광고 배치 정책**: 버튼 바로 옆·닫기 버튼 근처에 광고를 두면 정책 위반(우발적 클릭 유도)으로
-> 계정 제재를 받습니다. 광고와 인터랙션 요소 사이에 충분한 여백을 두세요.
+구독은 상품 ID 아래에 **base plan**이 있고, 할인·무료 체험은 offer입니다. 사용자가 선택 가능한
+`subscriptionOfferDetails`에서 `basePlanId`를 확인하고 그 항목의 `offerToken`을 결제에 넘깁니다.
 
-→ 공식 샘플: [googleads/googleads-mobile-android-examples](https://github.com/googleads/googleads-mobile-android-examples)
-— 배너/전면/보상형/네이티브 전부 Kotlin 예제 포함, SDK 업데이트마다 즉시 반영됩니다.
+```kotlin
+fun BillingManager.purchase(activity: Activity, product: ProductDetails, offerToken: String? = null) {
+    val item = BillingFlowParams.ProductDetailsParams.newBuilder()
+        .setProductDetails(product)
+        .apply { offerToken?.let(::setOfferToken) }
+        .build()
+    billingClient.launchBillingFlow(
+        activity,
+        BillingFlowParams.newBuilder().setProductDetailsParamsList(listOf(item)).build()
+    )
+}
+
+override fun onPurchasesUpdated(result: BillingResult, purchases: List<Purchase>?) {
+    if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+        purchases.orEmpty().forEach(::processPurchase)
+    }
+}
+
+private fun processPurchase(purchase: Purchase) {
+    if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED) return
+
+    // 서버에서 purchaseToken 검증 권장. 검증 성공 뒤 상품을 열고 acknowledge합니다.
+    val productIds = purchase.products // ⭐ 거래의 다른 ID가 아니라 productId 목록
+    if ("premium_theme" in productIds || "pro_monthly" in productIds) grantEntitlement(productIds)
+
+    if (!purchase.isAcknowledged) {
+        billingClient.acknowledgePurchase(
+            AcknowledgePurchaseParams.newBuilder()
+                .setPurchaseToken(purchase.purchaseToken).build()
+        ) { /* OK인지 확인하고 실패 시 재시도 */ }
+    }
+}
+```
+
+⚠️ **`productId`로 entitlement를 매핑하세요.** 주문 ID나 purchase token 같은 다른 `id` 필드를
+상품 키로 쓰면 결제는 성공했는데 기능이 안 열리는 버그가 납니다. token은 거래 검증/중복 방지용입니다.
+
+⚠️ **acknowledge는 3일 내 필수입니다.** `PURCHASED` 상태를 검증하고 혜택을 지급한 뒤
+`acknowledgePurchase`(소모품은 `consumeAsync`)하지 않으면 **3일 후 자동 환불**되고 권한도 회수됩니다.
+
+앱 재설치·기기 변경에 대비해 시작 시와 **구매 복원** 버튼에서 현재 소유 항목을 다시 조회합니다.
+
+```kotlin
+fun restorePurchases() {
+    listOf(BillingClient.ProductType.INAPP, BillingClient.ProductType.SUBS).forEach { type ->
+        billingClient.queryPurchasesAsync(
+            QueryPurchasesParams.newBuilder().setProductType(type).build()
+        ) { result, purchases ->
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                purchases.forEach(::processPurchase)
+            }
+        }
+    }
+}
+```
+
+### 출시 전에 반드시 확인
+
+- ⚠️ 리스너는 구매 요청 **전에** 등록하세요. 결제 중 백그라운드에 갔다 돌아온 완료 거래도 처리해야 합니다.
+- ⚠️ 눈에 보이는 **구매 복원** 버튼을 두세요. iOS도 함께 내는 앱이라면 App Store 심사 필수 항목입니다.
+- ⚠️ 환불·취소·구독 만료는 Play 실시간 개발자 알림 + Developer API, 또는 앱 시작 시 재검증으로
+  감지해 entitlement를 회수하세요. 로컬 Boolean 하나를 영구 권한처럼 믿으면 안 됩니다.
+- ⚠️ Android 테스트는 Play Console의 **라이선스 테스터**를 등록하고 테스트 트랙에서
+  **Play 스토어로 설치한 빌드**로 하세요. 사이드로드 APK는 서명/설치 경로가 달라 상품 목록이 빌 수 있습니다.
+- ⚠️ 가격은 `formattedPrice` 등 스토어가 준 현지화 문자열을 표시하세요. `₩4,900` 하드코딩은
+  환율·세금과 불일치하고 스토어 가격 표시 정책을 위반할 수 있습니다.
+- ⭐ 페이월에는 무료 기능과 유료 기능, 결제 주기·자동 갱신 조건을 정직하게 씁니다.
+  가짜 할인 타이머, 미리 선택된 고가 플랜, 찾기 힘든 닫기 버튼 같은 다크패턴은 쓰지 마세요.
+
+→ 공식 문서: [Google Play Billing 통합](https://developer.android.com/google/play/billing/integrate),
+[구매 테스트](https://developer.android.com/google/play/billing/test)
 
 ## 4-4. 릴리즈 빌드 / 서명
 
@@ -1888,10 +1983,6 @@ android {
 -keepattributes RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations
 -keep,allowobfuscation,allowshrinking interface retrofit2.Call
 -keep,allowobfuscation,allowshrinking class kotlin.coroutines.Continuation
-
-# AdMob
--keep class com.google.android.gms.ads.** { *; }
--dontwarn com.google.android.gms.**
 
 # 릴리즈에서 Log 호출 제거 (선택)
 -assumenosideeffects class android.util.Log {
@@ -2138,8 +2229,8 @@ Android Studio → Layout Inspector → Recomposition Counts 켜기
 ```
 
 > **개인정보처리방침**은 GitHub Pages나 Notion 공개 페이지로 무료 호스팅해도 됩니다.
-> 광고 SDK(AdMob)를 쓰면 **반드시** "광고 식별자 수집"을 방침과 Data Safety 양식에 명시해야 합니다.
-> 실제 동작과 신고 내용이 다르면 앱이 내려갑니다.
+> 결제 SDK와 서버가 처리하는 구매 내역·계정 식별자도 Data Safety 양식과 개인정보처리방침에
+> 실제 동작 그대로 명시하세요. 신고 내용이 다르면 앱이 내려갑니다.
 
 ### 릴리즈 트랙 순서
 
@@ -2183,7 +2274,7 @@ Android Studio → Layout Inspector → Recomposition Counts 켜기
 | STEP 2 (리스트) | Jetcaster / Now in Android 피드 화면 |
 | STEP 3 (ViewModel·네비) | Now in Android `feature/*` 모듈 |
 | STEP 4 (저장) | Now in Android의 DataStore·Room 사용부 |
-| 4-3 AdMob | googleads-mobile-android-examples |
+| 4-3 인앱 결제·구독 | Google Play Billing 공식 통합·테스트 문서 |
 | 4-7 테스트 | Now in Android의 `*Test.kt` (테스트 작성법의 교과서) |
 
 **학습 팁:**

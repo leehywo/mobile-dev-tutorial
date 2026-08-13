@@ -4,7 +4,7 @@
 > **이 문서의 범위**: Android만 다룹니다. 모든 예제가 **JS/React와 1:1 대조**로 되어 있어
 > 알던 개념에 이름표만 새로 붙이는 방식으로 진행합니다.
 >
-> 같은 시리즈: [iOS 트랙(Swift/SwiftUI)](./ios-swift-swiftui.md) · [React Native 트랙](./react-to-react-native.md) · [Unity(C#) 트랙](./react-to-unity.md) · [트랙 선택 가이드(README)](./README.md)
+> 같은 시리즈: [iOS 트랙(Swift/SwiftUI)](./ios-swift-swiftui.md) · [Unity(C#) 트랙](./react-to-unity.md) · [트랙 선택 가이드(README)](./README.md)
 >
 > ⚡ **Claude 어시스트 환경이면 [Fast-track 루트](#-fast-track-claude-어시스트-환경--추천)(6~9시간)부터 보세요.** 전체 루트(30~45시간)는 AI 없이 직접 개발할 사람용입니다.
 >

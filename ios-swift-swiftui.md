@@ -4,12 +4,12 @@
 > **이 문서의 범위**: iOS만 다룹니다. 모든 예제가 **JS/React와 1:1 대조**로 되어 있어
 > 알던 개념에 이름표만 새로 붙이는 방식으로 진행합니다.
 >
-> 같은 시리즈: [Android 트랙(Kotlin/Compose)](./android-kotlin-compose.md) · [React Native 트랙](./react-to-react-native.md) · [Unity(C#) 트랙](./react-to-unity.md) · [트랙 선택 가이드(README)](./README.md)
+> 같은 시리즈: [Android 트랙(Kotlin/Compose)](./android-kotlin-compose.md) · [Unity(C#) 트랙](./react-to-unity.md) · [트랙 선택 가이드(README)](./README.md)
 >
 > ⚡ **Claude 어시스트 환경이면 [Fast-track 루트](#-fast-track-claude-어시스트-환경--추천)(6~9시간)부터 보세요.** 전체 루트(30~45시간)는 AI 없이 직접 개발할 사람용입니다.
 >
 > 🖥️ **전제조건: Mac이 필요합니다.** Windows/Linux에서는 Xcode를 설치할 수 없습니다.
-> Mac이 없다면 [Android 트랙](./android-kotlin-compose.md)이나 [React Native 트랙](./react-to-react-native.md)부터 시작하세요.
+> Mac이 없다면 [Android 트랙](./android-kotlin-compose.md)부터 시작하세요.
 
 ---
 
@@ -36,7 +36,8 @@
 Mac이 없는 경우 선택지:
 1. 중고 MacBook Air (Apple Silicon 이상 권장) — 가장 현실적
 2. 클라우드 Mac 서비스 (MacStadium, AWS EC2 Mac 등) — 시간당 과금
-3. React Native + EAS 클라우드 빌드 — 개발은 Windows에서, 빌드만 클라우드
+3. 크로스플랫폼(Expo 등) + 클라우드 빌드 — 개발은 Windows에서, 빌드만 클라우드
+   (이 시리즈 범위 밖입니다. 공식 문서를 보세요)
 4. Android 먼저 하고 나중에 iOS
 
 디스크: Xcode + 시뮬레이터 런타임으로 최소 30~40GB 여유 필요

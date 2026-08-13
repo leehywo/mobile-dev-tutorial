@@ -1,11 +1,11 @@
 # React 개발자를 위한 Unity (C#) 튜토리얼 (완전판)
 
 > **이미 React/JS를 아는 웹 개발자**가 Unity로 게임·인터랙티브 앱을 만들기 위한 입문서.
-> RN 트랙과 달리 이번엔 **언어(C#)도, 패러다임(게임 루프)도 바뀝니다.**
+> 네이티브 트랙과 달리 이번엔 **언어(C#)도, 패러다임(게임 루프)도 바뀝니다.**
 > 하지만 좋은 소식: C#은 TypeScript와 사촌지간이고(같은 설계자 Anders Hejlsberg),
 > Unity의 최신 UI 시스템(UI Toolkit)은 **CSS/Flexbox 기반**이라 웹 개발자에게 오히려 유리합니다.
 >
-> 같은 시리즈: [Android 트랙(Kotlin/Compose)](./android-kotlin-compose.md) · [iOS 트랙(Swift/SwiftUI)](./ios-swift-swiftui.md) · [React Native 트랙](./react-to-react-native.md) · [트랙 선택 가이드(README)](./README.md)
+> 같은 시리즈: [Android 트랙(Kotlin/Compose)](./android-kotlin-compose.md) · [iOS 트랙(Swift/SwiftUI)](./ios-swift-swiftui.md) · [트랙 선택 가이드(README)](./README.md)
 
 ---
 
@@ -569,7 +569,7 @@ public class TodoController : MonoBehaviour
 
 ### API 준비
 
-네이티브/RN 트랙과 동일하게 OpenWeatherMap API 키를 사용합니다 (무료 발급).
+네이티브 트랙과 동일하게 OpenWeatherMap API 키를 사용합니다 (무료 발급).
 
 ### JSON 모델 (Assets/Scripts/WeatherData.cs)
 

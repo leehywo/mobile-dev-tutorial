@@ -148,6 +148,9 @@ def convert(md: str) -> str:
     html = re.sub(r'href="\.\./([^"#]+\.md)(#[^"]*)?"',
                   lambda m: f'href="{GITHUB}{m.group(1)}{m.group(2) or ""}" target="_blank" rel="noopener"',
                   html)
+    html = re.sub(r'href="\./(data/[^"#]+)"',
+                  lambda m: f'href="{GITHUB}unity-textbook/{m.group(1)}" target="_blank" rel="noopener"',
+                  html)
     return label_cells(html)
 
 

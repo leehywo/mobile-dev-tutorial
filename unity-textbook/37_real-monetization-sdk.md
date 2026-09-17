@@ -178,47 +178,63 @@ LTV30 ≈ 3.9 × 0.020 + 0.010 ≈ $0.088
     public bool interstitialEnabled = true;          // 25장 false → true (아래 최소 판 수로 첫 세션 보호)
     public int interstitialMinTotalRuns = 5;         // 37장: 누적 판 수가 이보다 적으면 전면 광고 없음
     public bool adFreeSkipsRewardedVideo = true;     // 37장: 패스 보유자는 보상형을 시청 없이 즉시 받음
-// StoreService — 속성 추가
+// StoreService — 속성 추가, ShouldOfferRemoveAds 교체 (25장 StoreProductButton은 이 속성을 그대로 사용)
     /// <summary>패스가 지금 설정에서 실제 효용이 있는가. false면 상점에서 상품을 숨긴다.</summary>
     public static bool RemoveAdsHasValue =>
         AdService.Config.interstitialEnabled || AdService.Config.adFreeSkipsRewardedVideo;
-// AdService — CanOffer 두 속성 교체, ShowRewarded 앞부분에 분기 추가
+    public static bool ShouldOfferRemoveAds =>
+        Current != null && Current.IsReady && RemoveAdsHasValue && !HasRemoveAds;
+// AdService — CanOffer 두 속성 교체, ShowRewarded의 allowed 검사 바로 뒤에 분기 추가
     private static bool PassSkipsVideo => StoreService.HasRemoveAds && Config.adFreeSkipsRewardedVideo;
-    public static bool CanOfferRevive => Current != null && Config.reviveEnabled
+    public static bool CanOfferRevive => Current != null && !showing && Config.reviveEnabled
         && revivesThisRun < Config.reviveMaxPerRun && (PassSkipsVideo || Current.IsRewardedReady);
-    public static bool CanOfferDoubleCoins => Current != null && Config.doubleCoinsEnabled
+    public static bool CanOfferDoubleCoins => Current != null && !showing && Config.doubleCoinsEnabled
         && !doubledThisRun && (PassSkipsVideo || Current.IsRewardedReady);
     public static void ShowRewarded(string placement, Action<bool> onFinished)
     {
-        if (Current == null) { onFinished?.Invoke(false); return; }
-        if (PassSkipsVideo)
+        bool allowed = placement == AdPlacements.Revive ? CanOfferRevive
+                     : placement == AdPlacements.DoubleCoins && CanOfferDoubleCoins;
+        if (!allowed) { onFinished?.Invoke(false); return; }   // 25장 그대로: 설정·횟수 검사가 항상 먼저
+        if (PassSkipsVideo)                                    // 검사를 통과한 뒤에만 시청 없이 지급
         {
-            if (placement == "revive") revivesThisRun++;
-            if (placement == "double_coins") doubledThisRun = true;
-            Analytics.Track("ad_rewarded_pass_skip", ("placement", placement));
+            if (placement == AdPlacements.Revive) revivesThisRun++; else doubledThisRun = true;
+            Analytics.Track("ad_rewarded_pass_skip", ("placement", placement), ("group", Config.experimentGroup));
             onFinished?.Invoke(true);
             return;
         }
-        // 이하 25장 코드 그대로: Analytics.Track("ad_rewarded_start", ...) 부터 끝까지
+        // 이하 25장 코드 그대로: showing = true; 부터 Current.ShowRewarded(placement, onShown: ..., onComplete: ...) 끝까지
     }
 // TryShowInterstitial — allowed 조건에 한 줄 추가
                        && SaveSystem.Load().stats.totalRuns >= Config.interstitialMinTotalRuns
 ```
 
-UI도 두 곳 바꿉니다. `RevivePanel` 버튼 문구는 `StoreService.HasRemoveAds ? "부활 (광고 제거 패스)" : "광고 보고 부활"`, 상점의 패스 행은 `SetActive(StoreService.RemoveAdsHasValue && !StoreService.HasRemoveAds)`. 스토어 콘솔과 게임 내 설명은 같은 문장을 씁니다: "판이 끝난 뒤 나오는 광고가 더 이상 나오지 않습니다. 부활·코인 2배를 광고 시청 없이 바로 받습니다(횟수 제한은 같습니다)."
+즉시 지급 분기는 25장의 `allowed` 검사 **뒤에** 둡니다. 앞에 두면 패스 보유자는 `reviveEnabled`·`reviveMaxPerRun`·`doubledThisRun` 검사를 건너뛰어 원격 킬 스위치도, 1판 1회 제한도 듣지 않습니다. `CanOffer…`의 `!showing`도 25장대로 유지합니다. 패스 분기는 광고를 띄우지 않으므로 `showing`을 켜지 않고, 노출(`ad_impression`)도 기록하지 않습니다.
+
+UI도 두 곳 바꿉니다. `RevivePanel` 버튼 문구는 `StoreService.HasRemoveAds ? "부활 (광고 제거 패스)" : "광고 보고 부활"`, 상점의 패스 행은 25장 `StoreProductButton`이 위에서 교체한 `StoreService.ShouldOfferRemoveAds`로 표시 여부를 정하므로 코드는 그대로 두고, 인스펙터의 Title만 "광고 제거 패스"로 바꿉니다. 스토어 콘솔과 게임 내 설명은 같은 문장을 씁니다: "판이 끝난 뒤 나오는 광고가 더 이상 나오지 않습니다. 부활·코인 2배를 광고 시청 없이 바로 받습니다(횟수 제한은 같습니다)."
 
 25장 `IStoreService.cs`는 바꾸지 않습니다. Unity IAP의 `OnPurchaseDeferred`는 25장 계약의 `PurchaseOutcome.Pending`에 대응하고, 5단계 구현은 저장 실패로 확인을 보류한 구매에도 `Pending`을 돌려줍니다. 구매 콜백이 `Pending`이면 "처리 대기 중입니다. 승인·처리가 끝나면 자동으로 지급됩니다"를 보여줍니다.
 
 ### 3단계: 지급 원장과 테스트
 
-10장 `SaveData`에 필드를 추가합니다. 구조 변경이므로 10장 규칙대로 `CurrentVersion`을 1 올리고 단계를 추가합니다. 스타터 팩이 캐릭터를 해금하므로 `unlockedCharacters`(10장 연습 문제 2의 v3)가 필요합니다. 아직이라면 함께 적용합니다.
+10장 `SaveData`에 필드를 추가합니다. 구조 변경이므로 10장 규칙대로 `CurrentVersion`을 1 올리고 단계를 추가합니다. 스타터 팩이 캐릭터를 해금하므로 `unlockedCharacters`(25장 5단계 v3 또는 10장 연습 문제 2)가 필요합니다. 아직이라면 함께 적용합니다.
 
 ```csharp
 // SaveData.cs (10장) — 필드 추가
     public List<string> grantedEntitlements = new();   // 37장: 지급을 끝낸 상품 ID
 // SaveMigrator.cs (10장) — 현재 버전이 N이면 Steps에 { N, AddGrantedEntitlements }, CurrentVersion = N + 1
-    private static void AddGrantedEntitlements(JObject root) => root["grantedEntitlements"] ??= new JArray();
+    private static void AddGrantedEntitlements(JObject root)
+    {
+        var granted = root["grantedEntitlements"] as JArray ?? new JArray();
+        // 25장 방식으로 이미 스타터 팩 코인을 받은 세이브는 원장에 "처리했음"으로 옮겨 이중 지급을 막는다
+        bool starterGranted = root["starterPackGranted"]?.Type == JTokenType.Boolean && (bool)root["starterPackGranted"];
+        bool recorded = false;
+        foreach (JToken t in granted) if ((string)t == "starter_pack") recorded = true;
+        if (starterGranted && !recorded) granted.Add("starter_pack");
+        root["grantedEntitlements"] = granted;
+    }
 ```
+
+25장 5단계의 `starterPackGranted`·`grantedTransactions`는 지우지 않습니다(필드를 지우는 것도 구조 변경입니다). 이 장부터 지급 판단은 `grantedEntitlements`만 보며, 위 이관 덕분에 25장 가짜 스토어로 스타터 팩을 이미 받은 세이브는 다시 받지 않습니다.
 
 지급 규칙은 테스트할 수 있게 `CoinRush.SaveCore` 어셈블리의 순수 함수로 둡니다. 25장 `ProductIds`는 `Assembly-CSharp`에 있어 이 어셈블리에서 보이지 않으므로 같은 값을 상수로 두고, 7단계에서 일치를 검사합니다.
 
@@ -324,11 +340,13 @@ public class AdMobAdService : MonoBehaviour, IAdService
     private bool rewardedLoading, rewardEarned;
     private int rewardedAttempts;
     private float rewardedRetryAt = -1f, rewardedClosedAt = -1f;
-    private Action<AdResult> rewardedCallback;
+    private Action rewardedShown;                  // 표시 1회당 한 번: 호출하면 null
+    private Action<AdResult> rewardedCallback;     // 표시 1회당 한 번: 호출하면 null (null이 아니면 표시 중)
     private InterstitialAd interstitial;
     private bool interstitialLoading;
     private int interstitialAttempts;
     private float interstitialRetryAt = -1f;
+    private Action interstitialShown;
     private Action interstitialCallback;
     private bool Showing => rewardedCallback != null || interstitialCallback != null;
     public bool IsRewardedReady => initialized && !Showing && rewarded != null && rewarded.CanShowAd();
@@ -399,23 +417,38 @@ public class AdMobAdService : MonoBehaviour, IAdService
                 if (error != null || ad == null) { rewardedRetryAt = Retry("rewarded", error, ref rewardedAttempts); return; }
                 rewardedAttempts = 0;
                 rewarded = ad;
+                // 모든 광고 이벤트는 ① 메인 스레드로 넘기고 ② 지금 들고 있는 광고의 것인지 확인한다.
+                // 완료 처리에서 rewarded를 비우므로, 이미 끝난 광고의 늦은 이벤트는 여기서 걸러진다.
                 ad.OnAdPaid += (AdValue v) => MobileAdsEventExecutor.ExecuteInUpdate(() => TrackPaid("rewarded", v));
-                ad.OnAdFullScreenContentClosed += () => MobileAdsEventExecutor.ExecuteInUpdate(() => rewardedClosedAt = Time.unscaledTime);
-                ad.OnAdFullScreenContentFailed += (AdError e) => MobileAdsEventExecutor.ExecuteInUpdate(() => CompleteRewarded(AdResult.Failed));
+                ad.OnAdFullScreenContentOpened += () => MobileAdsEventExecutor.ExecuteInUpdate(() =>
+                {
+                    if (ad != rewarded) return;
+                    Action shown = rewardedShown; rewardedShown = null;
+                    shown?.Invoke();                                   // 25장 계약의 onShown → 파사드가 ad_impression 기록
+                });
+                ad.OnAdFullScreenContentClosed += () => MobileAdsEventExecutor.ExecuteInUpdate(() =>
+                {
+                    if (ad == rewarded && rewardedCallback != null) rewardedClosedAt = Time.unscaledTime;
+                });
+                ad.OnAdFullScreenContentFailed += (AdError e) => MobileAdsEventExecutor.ExecuteInUpdate(() =>
+                {
+                    if (ad == rewarded) CompleteRewarded(AdResult.Failed);   // 표시 실패: onShown 없이 onComplete만
+                });
             }));
     }
-    public void ShowRewarded(string placement, Action<AdResult> onComplete)
+    public void ShowRewarded(string placement, Action onShown, Action<AdResult> onComplete)
     {
-        if (!IsRewardedReady) { onComplete?.Invoke(AdResult.NotReady); return; }
-        rewardedCallback = onComplete; rewardEarned = false; rewardedClosedAt = -1f;
+        if (!IsRewardedReady) { onComplete?.Invoke(AdResult.NotReady); return; }   // 표시 안 됨 → onShown 없음
+        rewardedShown = onShown; rewardedCallback = onComplete; rewardEarned = false; rewardedClosedAt = -1f;
         rewarded.Show((Reward reward) => MobileAdsEventExecutor.ExecuteInUpdate(() => rewardEarned = true));
     }
     private void CompleteRewarded(AdResult result)
     {
+        if (rewardedCallback == null) return;                   // 이미 완료됨 (닫힘·실패가 둘 다 와도 한 번)
         Action<AdResult> callback = rewardedCallback;
-        rewardedCallback = null; rewardedClosedAt = -1f;
-        LoadRewarded();               // 한 번 보여준 광고는 재사용 불가 → 파기 후 다시 로드
-        callback?.Invoke(result);
+        rewardedCallback = null; rewardedShown = null; rewardedClosedAt = -1f;
+        LoadRewarded();               // 한 번 보여준 광고는 재사용 불가 → 파기 후 다시 로드 (rewarded = null)
+        callback.Invoke(result);
     }
     private void LoadInterstitial()
     {
@@ -429,21 +462,35 @@ public class AdMobAdService : MonoBehaviour, IAdService
                 interstitialAttempts = 0;
                 interstitial = ad;
                 ad.OnAdPaid += (AdValue v) => MobileAdsEventExecutor.ExecuteInUpdate(() => TrackPaid("interstitial", v));
-                ad.OnAdFullScreenContentClosed += () => MobileAdsEventExecutor.ExecuteInUpdate(CompleteInterstitial);
-                ad.OnAdFullScreenContentFailed += (AdError e) => MobileAdsEventExecutor.ExecuteInUpdate(CompleteInterstitial);
+                ad.OnAdFullScreenContentOpened += () => MobileAdsEventExecutor.ExecuteInUpdate(() =>
+                {
+                    if (ad != interstitial) return;
+                    Action shown = interstitialShown; interstitialShown = null;
+                    shown?.Invoke();
+                });
+                ad.OnAdFullScreenContentClosed += () => MobileAdsEventExecutor.ExecuteInUpdate(() =>
+                {
+                    if (ad == interstitial) CompleteInterstitial();
+                });
+                ad.OnAdFullScreenContentFailed += (AdError e) => MobileAdsEventExecutor.ExecuteInUpdate(() =>
+                {
+                    if (ad == interstitial) CompleteInterstitial();   // 표시 실패: onShown 없이 onClosed만
+                });
             }));
     }
-    public void ShowInterstitial(string placement, Action onClosed)
+    public void ShowInterstitial(string placement, Action onShown, Action onClosed)
     {
-        if (!IsInterstitialReady) { onClosed?.Invoke(); return; }
-        interstitialCallback = onClosed;
+        if (!IsInterstitialReady) { onClosed?.Invoke(); return; }   // 표시 안 됨 → onShown 없음
+        interstitialShown = onShown; interstitialCallback = onClosed;
         interstitial.Show();
     }
     private void CompleteInterstitial()
     {
-        Action callback = interstitialCallback; interstitialCallback = null;
-        LoadInterstitial();
-        callback?.Invoke();
+        if (interstitialCallback == null) return;               // 이미 완료됨
+        Action callback = interstitialCallback;
+        interstitialCallback = null; interstitialShown = null;
+        LoadInterstitial();           // interstitial = null → 같은 광고의 늦은 이벤트는 무시됨
+        callback.Invoke();
     }
     private void Update()
     {
@@ -472,6 +519,16 @@ public class AdMobAdService : MonoBehaviour, IAdService
 }
 #endif
 ```
+
+25장 `IAdService`의 두 메서드 시그니처(`onShown` 포함)를 그대로 구현합니다. 인자만 맞추고 `onShown`을 부르지 않으면 컴파일은 되어도 파사드의 `ad_impression`이 0으로 찍혀 25장 A/B 실험의 주 지표가 사라집니다. 콜백 규칙은 다음과 같습니다.
+
+| 경로 | `onShown` | `onComplete` / `onClosed` |
+|---|---|---|
+| 준비 안 됨(로드 실패·로드 중·표시 중) | 호출 안 함 | 즉시 1회 (`NotReady` / 닫힘) |
+| 표시 실패 `OnAdFullScreenContentFailed` | 호출 안 함 | 1회 (`Failed` / 닫힘) |
+| 표시 `OnAdFullScreenContentOpened` → 닫힘 `OnAdFullScreenContentClosed` | 열림에서 1회 | 닫힘(보상형은 유예 후)에서 1회 |
+
+한 번 호출한 콜백은 필드를 `null`로 비워 두 번 부르지 않고, 완료 처리에서 광고를 파기하므로(`LoadRewarded`·`LoadInterstitial`) 같은 광고의 늦은 이벤트는 `ad == rewarded` 검사에서 걸러집니다. 모든 이벤트는 `ExecuteInUpdate`로 메인 스레드에서 처리하므로 파사드의 `Analytics.Track`을 그대로 불러도 안전합니다. Android는 광고가 떠 있는 동안 Unity가 멈추므로 `onShown`이 실제로는 광고가 닫힌 직후 `onComplete` 바로 앞에 실행될 수 있습니다. 노출 **수**는 정확하지만 이벤트 시각은 닫힘 시각에 가깝다는 점을 분석에서 감안합니다.
 
 ### 5단계: UnityIapStoreService — 지급 후 확인, 복원, 환불 반영
 
@@ -652,7 +709,7 @@ Unity Cloud 대시보드 > Remote Config(development 환경)에 **JSON 타입** 
 ```json
 { "reviveEnabled": true, "reviveMaxPerRun": 1, "doubleCoinsEnabled": true, "interstitialEnabled": true,
   "interstitialEveryNRuns": 3, "interstitialMinSeconds": 180, "interstitialMinTotalRuns": 5,
-  "adFreeSkipsRewardedVideo": true, "experimentGroup": "control" }
+  "adFreeSkipsRewardedVideo": true, "experimentName": "", "experimentGroup": "control" }
 ```
 
 파일: `Assets/_CoinRush/Scripts/Monetization/RemoteMonetizationConfig.cs`
@@ -731,12 +788,19 @@ public class MonetizationBootstrap : MonoBehaviour
 #else
         Install(null, null, defaults);          // Steam 유료판: 광고·IAP·원격 설정 없음
 #endif
+        RunRecorder.RunStarted += OnRunStarted;   // 25장과 같음: 판 시작에서만 부활 횟수·코인 2배·판 ID 초기화
         if (fetchRemoteConfig && AdService.Current != null)
         {
             MonetizationConfig remote = await RemoteMonetizationConfig.FetchAsync(defaults, SaveSystem.Load().stats.totalRuns);
-            if (this != null) AdService.Install(AdService.Current, remote);   // 서비스는 그대로, 설정만 교체
+            if (this == null) return;
+            AdService.Install(AdService.Current, remote);   // 서비스는 그대로, 설정만 교체 (판 단위 횟수는 유지됨)
         }
+        MonetizationConfig applied = AdService.Config;   // 25장과 같음: 최종 적용된 그룹을 A/B 분모로 기록
+        if (!string.IsNullOrEmpty(applied.experimentName))
+            Analytics.Track("experiment_assign", ("experiment", applied.experimentName), ("group", applied.experimentGroup));
     }
+    private void OnDestroy() => RunRecorder.RunStarted -= OnRunStarted;
+    private static void OnRunStarted(RunRecorder run) => AdService.OnRunStarted(run.RunId);
     private static void Install(IAdService ads, IStoreService store, MonetizationConfig config)
     {
         AdService.Install(ads, config);
@@ -767,7 +831,7 @@ public class MonetizationBootstrap : MonoBehaviour
 }
 ```
 
-`StoreService.Current`는 `Install` 안에서 구독보다 먼저 설정되므로 핸들러에서 바로 쓸 수 있습니다. 상점 패널(25장 5단계)은 `OnEnable`/`OnDisable`에서 `MonetizationBootstrap.EntitlementSaveFailed`를 구독·해제하고 "구매는 완료되었지만 저장 공간 부족 등으로 지급을 저장하지 못했습니다. 저장 공간을 확보한 뒤 앱을 다시 시작하면 자동으로 지급됩니다"를 띄웁니다. 결제 금액이 빠져나간 사용자에게 아무 말도 하지 않으면 환불 요청과 부정 리뷰로 돌아옵니다.
+`StoreService.Current`는 `Install` 안에서 구독보다 먼저 설정되므로 핸들러에서 바로 쓸 수 있습니다. 통째로 교체하더라도 25장 부트스트랩의 **`RunRecorder.RunStarted` 구독(`OnDestroy`에서 해제)과 `experiment_assign` 기록은 그대로 옮깁니다.** 구독이 빠지면 `AdService.OnRunStarted`가 한 번도 불리지 않아, 첫 판에 부활·코인 2배를 한 번 쓰면 앱을 다시 켤 때까지 다음 판들에서 버튼이 나오지 않고 `CurrentRunId`도 비어 있어 부활 창의 판 ID 검사가 무력해집니다. 구독은 첫 `await`보다 앞에 두어 원격 설정을 기다리는 동안 시작된 판도 놓치지 않게 합니다. 상점 패널(25장 5단계)은 `OnEnable`/`OnDisable`에서 `MonetizationBootstrap.EntitlementSaveFailed`를 구독·해제하고 "구매는 완료되었지만 저장 공간 부족 등으로 지급을 저장하지 못했습니다. 저장 공간을 확보한 뒤 앱을 다시 시작하면 자동으로 지급됩니다"를 띄웁니다. 결제 금액이 빠져나간 사용자에게 아무 말도 하지 않으면 환불 요청과 부정 리뷰로 돌아옵니다.
 
 인스펙터에 `AdUnitIds.asset`을 연결합니다. 11장 설정 화면에는 "구매 복원"(`StoreService.Current?.RestorePurchases`)과, 모바일에서 `AdMobAdService.PrivacyOptionsRequired`일 때만 보이는 "개인정보 옵션"(`AdMobAdService.ShowPrivacyOptions()`, `#if UNITY_ANDROID || UNITY_IOS`로 감쌈) 버튼을 둡니다.
 
@@ -792,8 +856,11 @@ public class MonetizationBootstrap : MonoBehaviour
 | A1 | EEA 동의·변경 | `debugForceEeaConsent` 개발 빌드, 앱 데이터 삭제 후 실행 → 설정 > 개인정보 옵션 | 동의 양식 → 광고 로드, 옵션에서 양식 재표시 | `ads_consent can_request=true` |
 | A2 | 보상형 완료 / 중간 닫기 | 사망 → 광고 보고 부활 → 끝까지 / 도중 닫기 | "Test Ad" 라벨, 부활 / 부활 없이 결과 화면 | `ad_rewarded_end result=Rewarded` / `Skipped` |
 | A3 | 오프라인 | 비행기 모드로 시작 | 부활 버튼 없음, 오류 팝업 없음 | `ad_load_fail` 간격이 늘어남 |
-| A4 | 전면 조건 | 누적 5판 미만/이상에서 결과→타이틀 | 미만 없음, 이상 3판마다 | `ad_interstitial_show` |
+| A4 | 전면 조건 | 누적 5판 미만/이상에서 결과→타이틀 | 미만 없음, 이상 3판마다 | `ad_impression format=interstitial` |
+| A5 | 노출 집계(`onShown`) | 보상형 끝까지·중간 닫기, 전면 1회씩 표시 / A3 오프라인 상태 | 광고가 뜬 횟수만큼만 노출 기록 / 노출 기록 없음 | 표시 1회당 `ad_impression`(format=rewarded·interstitial) **정확히 1회**, 보상형은 그 뒤 `ad_rewarded_end` 1회 / `ad_impression` 0회 |
+| A6 | 새 판 초기화 | 1판: 부활·코인 2배 사용 → 재시작해 2판에서 사망·결과 화면 | 2판에서도 부활 창·코인 2배 버튼이 다시 나옴, 같은 판 안에서는 두 번째 부활 없음 | 판마다 `run_start`의 `run_id`가 바뀌고 `ad_offer placement=revive` 1회 |
 | P1 | 패스 구매 | always approves | 전면 광고 사라짐, 부활 즉시 | `iap_purchase Success`, `ad_rewarded_pass_skip` |
+| P1b | 패스 보유자 횟수 제한 | 패스 보유 상태에서 한 판에 두 번 사망 / 원격 `reviveEnabled` false 후 재실행 | 첫 사망만 즉시 부활, 두 번째는 부활 창 없이 결과 / 부활 창 없음 | 판당 `ad_rewarded_pass_skip placement=revive` 최대 1회 / 0회 |
 | P2 | 결제 거절 / 취소 | always declines / 창 닫기 | 소유 없음, 조용히 복귀 | `outcome=Failed` / `Cancelled` |
 | P3 | 느린 결제 | Slow test card approves | 대기 안내 → 몇 분 뒤 자동 지급 | `outcome=Pending reason=Deferred` 후 `iap_entitlement` |
 | P4 | 확인 전 종료 | 스타터 팩 결제 직후 강제 종료 → 재실행 | 코인 +3,000 **한 번만**, 3분 뒤 환불 메일 없음 | `newly_granted=true` 1회 |
@@ -881,7 +948,7 @@ DAU가 늘어 LevelPlay 또는 AdMob 미디에이션을 검토합니다. 게임 
 
 <details><summary>힌트·해설</summary>
 
-작업: 새 `IAdService` 구현(동의 전달·보상 콜백·메인 스레드·재로드 백오프), 부트스트랩 생성 줄 교체, 스토어 개인정보 양식과 app-ads.txt 갱신. 실험: `MonetizationConfig.adProvider`를 두되 SDK 초기화는 시작 시 한 번 정해지므로 다음 실행부터 적용, 사용자 단위 배정, ARPDAU 주 지표·D1 보호 지표(25장 계획서 형식). 재수행: A1~A4와 S1 전부, 부트스트랩이 바뀌므로 P1·P4.
+작업: 새 `IAdService` 구현(동의 전달·보상 콜백·메인 스레드·재로드 백오프), 부트스트랩 생성 줄 교체, 스토어 개인정보 양식과 app-ads.txt 갱신. 실험: `MonetizationConfig.adProvider`를 두되 SDK 초기화는 시작 시 한 번 정해지므로 다음 실행부터 적용, 사용자 단위 배정, ARPDAU 주 지표·D1 보호 지표(25장 계획서 형식). 재수행: A1~A6과 S1 전부(새 구현이 `onShown`을 표시 1회당 한 번 부르는지 A5로 확인), 부트스트랩이 바뀌므로 P1·P1b·P4.
 
 </details>
 

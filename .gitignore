@@ -3,3 +3,5 @@
 .idea/
 *.swp
 *.bak
+tools/dash/*.html
+__pycache__/

@@ -5,7 +5,7 @@
 > 하지만 좋은 소식: C#은 TypeScript와 사촌지간이고(같은 설계자 Anders Hejlsberg),
 > Unity의 최신 UI 시스템(UI Toolkit)은 **CSS/Flexbox 기반**이라 웹 개발자에게 오히려 유리합니다.
 >
-> 같은 시리즈: [Android 트랙(Kotlin/Compose)](./android-kotlin-compose.md) · [iOS 트랙(Swift/SwiftUI)](./ios-swift-swiftui.md) · [트랙 선택 가이드(README)](./README.md)
+> 같은 시리즈: [기초 이후 → 인디 게임 개발자 로드맵](./unity-indie-roadmap.md) · [Android 트랙(Kotlin/Compose)](./android-kotlin-compose.md) · [iOS 트랙(Swift/SwiftUI)](./ios-swift-swiftui.md) · [트랙 선택 가이드(README)](./README.md)
 
 ---
 
@@ -1084,6 +1084,9 @@ public void RestorePurchases()
 ---
 
 # 부록: 다음 단계 & 리소스
+
+> 🎯 **이 트랙을 끝냈다면** → [Unity 인디 게임 개발자 로드맵](./unity-indie-roadmap.md):
+> 아키텍처·렌더 파이프라인·쉐이더·게임 디자인·수익화·마케팅·법/세무까지 기초 이후 필요한 전부를 정리했습니다.
 
 ## 추천 타임라인
 

@@ -11,6 +11,7 @@
 | 🤖 **Android** | [android-kotlin-compose.md](./android-kotlin-compose.md) | Kotlin + Jetpack Compose | Mac 없이 시작 가능. 출시 비용 저렴($25 1회), 심사 빠름 |
 | 🍎 **iOS** | [ios-swift-swiftui.md](./ios-swift-swiftui.md) | Swift + SwiftUI | **Mac 필수**. 수익성·UX 완성도 높고 고유 기능(Live Activity 등)이 강력 |
 | 🎮 **Unity** | [react-to-unity.md](./react-to-unity.md) | C# + Unity 6 (UI Toolkit / UGUI) | 게임·인터랙티브 콘텐츠·AR/VR이 목표 |
+| 🎯 **Unity 심화** | [unity-indie-roadmap.md](./unity-indie-roadmap.md) | 렌더링·쉐이더·아키텍처 + 디자인·수익화·마케팅 | Unity 기초 이후, 인디 게임으로 수익을 내는 게 목표 |
 
 > **크로스플랫폼(React Native/Flutter) 트랙은 이 시리즈에서 다루지 않습니다.** 이유와 대안은
 > 아래 [크로스플랫폼은 어디로 갔나](#크로스플랫폼은-어디로-갔나) 참고.

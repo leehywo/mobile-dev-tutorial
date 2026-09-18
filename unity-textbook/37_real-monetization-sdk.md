@@ -133,7 +133,7 @@ PurchaseProduct("remove_ads")
 - 이전 실행에서 동의했다면 `CanRequestAds()`가 곧바로 true이므로, 공식 샘플처럼 갱신을 기다리지 않고 초기화를 시작합니다.
 - 코인 러시는 iOS에서 **추적 권한을 요청하지 않는 것**으로 시작해도 됩니다. 추적 없이도 광고는 게재됩니다. 요청한다면 AdMob의 IDFA 설명 메시지로 UMP가 순서를 관리하게 하고 Info.plist 문구를 넣습니다. 어린이 대상이면 흐름 전체가 달라지므로(가족 정책) 코인 러시는 13세 이상으로 등록합니다.
 - **스레드**: 플러그인의 광고 이벤트는 Unity 메인 스레드가 아닌 곳에서 올 수 있습니다. 거기서 UI·`GameObject`·`Time`을 건드리면 간헐적 크래시가 납니다. 공식 가이드대로 `MobileAdsEventExecutor.ExecuteInUpdate(() => ...)`로 넘깁니다. 예전의 `MobileAds.RaiseAdEventsOnUnityMainThread`는 최신 버전에서 obsolete이고, 백그라운드 중 이벤트가 지연된다는 경고가 있습니다.
-- **보상 신호와 닫힘 신호의 도착 순서를 믿지 않습니다.** 닫힘을 받은 뒤 짧은 유예 시간 동안 보상 신호를 기다렸다가 결과를 확정합니다.
+- **보상 신호와 닫힘 신호는 한 표시 단위로 묶어 처리합니다.** 기본 Google 광고는 보상 콜백이 닫힘보다 먼저 오지만 미디에이션에서는 공급자에 따라 다를 수 있으므로, 닫힘을 받은 뒤 짧은 유예 시간 동안 보상 신호를 기다렸다가 결과를 확정합니다. 그리고 보상이 **어느 표시의 것인지**를 확인해, 이미 끝난 표시의 늦은 보상이 다음 광고의 결과가 되지 않게 합니다.
 
 ### Remote Config: 기본값 → 캐시 → 원격
 
@@ -234,7 +234,7 @@ UI도 두 곳 바꿉니다. `RevivePanel` 버튼 문구는 `StoreService.HasRemo
     }
 ```
 
-25장 5단계의 `starterPackGranted`·`grantedTransactions`는 지우지 않습니다(필드를 지우는 것도 구조 변경입니다). 이 장부터 지급 판단은 `grantedEntitlements`만 보며, 위 이관 덕분에 25장 가짜 스토어로 스타터 팩을 이미 받은 세이브는 다시 받지 않습니다.
+25장 5단계의 `starterPackGranted`·`grantedTransactions`는 지우지 않습니다(필드를 지우는 것도 구조 변경입니다). 이 장부터 지급 판단은 `grantedEntitlements`만 보며, 위 이관 덕분에 25장 가짜 스토어로 스타터 팩을 이미 받은 세이브는 다시 받지 않습니다(이 이관 자체를 아래 `SaveMigrationTests`로 검증합니다).
 
 지급 규칙은 테스트할 수 있게 `CoinRush.SaveCore` 어셈블리의 순수 함수로 둡니다. 25장 `ProductIds`는 `Assembly-CSharp`에 있어 이 어셈블리에서 보이지 않으므로 같은 값을 상수로 두고, 7단계에서 일치를 검사합니다.
 
@@ -291,6 +291,53 @@ public class EntitlementLedgerTests
     }
 }
 ```
+
+이 테스트는 **새 원장의 저장 왕복**만 확인합니다. 25장 방식(`starterPackGranted = true`)으로 저장된 **구버전 세이브가 새 원장으로 이관되어 스타터 팩이 두 번 지급되지 않는지**는 10장 `SaveMigrationTests.cs`에 같은 형식으로 두 개를 더 추가해 확인합니다. 마이그레이션은 `JObject`를 고치는 함수이므로 테스트도 10장처럼 옛 payload 문자열에서 시작합니다.
+
+```csharp
+// Assets/_CoinRush/Tests/EditMode/SaveMigrationTests.cs (10장) — 클래스 안에 아래를 추가
+// 파일 위쪽 using 은 10장 그대로: using Newtonsoft.Json.Linq; using NUnit.Framework;
+    // 이 장의 변환 단계가 마지막이므로 직전 버전은 CurrentVersion - 1이다.
+    // 이 뒤에 다른 구조 변경을 더하면 그때의 값(N)으로 고정한다.
+    private static readonly int LegacyVersion = SaveData.CurrentVersion - 1;
+    // 25장 5단계는 스타터 팩 지급 여부를 starterPackGranted에 적었다 (grantedEntitlements 없음)
+    private static string GrantedLegacyPayload => $@"{{ ""version"": {LegacyVersion}, ""coins"": 3120,
+        ""starterPackGranted"": true, ""unlockedCharacters"": [ ""knight"", ""vault_keeper"" ] }}";
+    private static string PlainLegacyPayload => $@"{{ ""version"": {LegacyVersion}, ""coins"": 3120,
+        ""starterPackGranted"": false, ""unlockedCharacters"": [ ""knight"" ] }}";
+
+    [Test]
+    public void Legacy_StarterPack_Save_Is_Migrated_And_Not_Granted_Again()
+    {
+        JObject root = JObject.Parse(GrantedLegacyPayload);
+
+        SaveMigrator.MigrateToCurrent(root);
+        SaveData save = root.ToObject<SaveData>();
+
+        Assert.AreEqual(SaveData.CurrentVersion, save.version);
+        CollectionAssert.Contains(save.grantedEntitlements, EntitlementLedger.StarterPackId, "이관 누락");
+        // 재설치·복원으로 스토어가 같은 구매를 다시 보내도 지급은 일어나지 않아야 한다
+        Assert.IsFalse(EntitlementLedger.TryGrant(save, EntitlementLedger.StarterPackId), "구버전 세이브 이중 지급");
+        Assert.AreEqual(3120, save.coins, "이미 받은 코인이 다시 지급되면 안 됩니다.");
+        Assert.AreEqual(1, save.unlockedCharacters.FindAll(c => c == EntitlementLedger.StarterPackCharacter).Count);
+    }
+
+    [Test]
+    public void Legacy_Save_Without_StarterPack_Still_Gets_It_Once()
+    {
+        JObject root = JObject.Parse(PlainLegacyPayload);
+
+        SaveMigrator.MigrateToCurrent(root);
+        SaveData save = root.ToObject<SaveData>();
+
+        CollectionAssert.DoesNotContain(save.grantedEntitlements, EntitlementLedger.StarterPackId);
+        Assert.IsTrue(EntitlementLedger.TryGrant(save, EntitlementLedger.StarterPackId), "안 산 사람은 살 수 있어야 함");
+        Assert.AreEqual(3120 + EntitlementLedger.StarterPackCoins, save.coins);
+        Assert.IsFalse(EntitlementLedger.TryGrant(save, EntitlementLedger.StarterPackId), "두 번째는 막힌다");
+    }
+```
+
+두 번째 테스트가 있어야 이관이 **과하게** 동작하는 경우(플래그가 없는 세이브까지 "지급함"으로 표시해 정당한 구매를 막는 경우)를 잡습니다. 한쪽만 두면 `granted.Add("starter_pack")`을 무조건 부르는 구현도 첫 테스트를 통과합니다.
 
 ### 4단계: 광고 단위 ID 에셋과 AdMobAdService
 
@@ -440,7 +487,18 @@ public class AdMobAdService : MonoBehaviour, IAdService
     {
         if (!IsRewardedReady) { onComplete?.Invoke(AdResult.NotReady); return; }   // 표시 안 됨 → onShown 없음
         rewardedShown = onShown; rewardedCallback = onComplete; rewardEarned = false; rewardedClosedAt = -1f;
-        rewarded.Show((Reward reward) => MobileAdsEventExecutor.ExecuteInUpdate(() => rewardEarned = true));
+        RewardedAd shownAd = rewarded;     // 이번 표시의 광고를 캡처: 보상도 열림·닫힘과 같은 기준으로 주인을 가린다
+        shownAd.Show((Reward reward) => MobileAdsEventExecutor.ExecuteInUpdate(() =>
+        {
+            if (shownAd != rewarded || rewardedCallback == null)
+            {
+                // 이미 끝난 표시의 늦은 보상. 지금 표시 중인 다른 광고로 새지 않게 버리고 기록만 남긴다
+                Debug.LogWarning($"[Ads] 끝난 표시의 늦은 보상을 버림 (placement={placement})");
+                Analytics.Track("ad_reward_late", ("placement", placement));
+                return;
+            }
+            rewardEarned = true;
+        }));
     }
     private void CompleteRewarded(AdResult result)
     {
@@ -529,6 +587,12 @@ public class AdMobAdService : MonoBehaviour, IAdService
 | 표시 `OnAdFullScreenContentOpened` → 닫힘 `OnAdFullScreenContentClosed` | 열림에서 1회 | 닫힘(보상형은 유예 후)에서 1회 |
 
 한 번 호출한 콜백은 필드를 `null`로 비워 두 번 부르지 않고, 완료 처리에서 광고를 파기하므로(`LoadRewarded`·`LoadInterstitial`) 같은 광고의 늦은 이벤트는 `ad == rewarded` 검사에서 걸러집니다. 모든 이벤트는 `ExecuteInUpdate`로 메인 스레드에서 처리하므로 파사드의 `Analytics.Track`을 그대로 불러도 안전합니다. Android는 광고가 떠 있는 동안 Unity가 멈추므로 `onShown`이 실제로는 광고가 닫힌 직후 `onComplete` 바로 앞에 실행될 수 있습니다. 노출 **수**는 정확하지만 이벤트 시각은 닫힘 시각에 가깝다는 점을 분석에서 감안합니다.
+
+**보상 콜백도 같은 기준으로 주인을 가립니다.** `ShowRewarded`는 이번에 띄우는 광고를 `shownAd`로 캡처해 두고, 보상이 도착하면 그 광고가 아직 현재 광고인지(`shownAd == rewarded`)와 이 표시의 완료 콜백이 남아 있는지를 확인한 뒤에만 `rewardEarned`를 켭니다. 이 확인이 없으면 유예 시간이 지나 `Skipped`로 끝난 A 광고의 보상이 뒤이어 띄운 B 광고의 결과를 `Rewarded`로 바꿔 놓습니다. "한 표시당 완료 콜백 최대 한 번"과 "올바른 광고에 올바른 보상"은 다른 조건이고, 앞의 것만으로는 뒤의 것이 지켜지지 않습니다.
+
+이미 끝난 표시의 늦은 보상은 **조용히 버리고 로그와 `ad_reward_late`만 남깁니다.** 소급 지급을 하려면 "어느 판의 어느 placement에 주는가"를 다시 정해야 하는데, 그 사이 플레이어는 결과 화면을 지나 다음 판을 시작했을 수 있어 규칙을 붙일수록 결과가 예측하기 어려워집니다. 놓치는 쪽의 손해는 드물게 광고 1회분이고, 엉뚱한 광고에 보상을 주는 쪽은 그때마다 부당한 이득이므로 버리는 쪽을 택했습니다. 버린 사실은 로그에 남으니 `ad_reward_late`가 자주 찍히면 유예 시간이나 광고 공급자를 다시 봅니다.
+
+기본 Google 광고는 보상 콜백이 닫힘보다 **먼저** 오므로 이 코드에서는 유예 시간 안에 정상 확정됩니다. 미디에이션을 붙이면 순서와 지연이 공급자에 따라 달라질 수 있어 이 방어가 의미를 갖습니다. 다만 위 구현이 보장하는 것은 "늦은 보상이 **다른** 광고의 결과에 반영되지 않는다"까지입니다. 임의의 순서·지연에서도 보상을 놓치지 않는 것까지 보장하지는 않으며, 유예 시간보다 늦게 도착한 보상은 버려집니다.
 
 ### 5단계: UnityIapStoreService — 지급 후 확인, 복원, 환불 반영
 
@@ -859,6 +923,7 @@ public class MonetizationBootstrap : MonoBehaviour
 | A4 | 전면 조건 | 누적 5판 미만/이상에서 결과→타이틀 | 미만 없음, 이상 3판마다 | `ad_impression format=interstitial` |
 | A5 | 노출 집계(`onShown`) | 보상형 끝까지·중간 닫기, 전면 1회씩 표시 / A3 오프라인 상태 | 광고가 뜬 횟수만큼만 노출 기록 / 노출 기록 없음 | 표시 1회당 `ad_impression`(format=rewarded·interstitial) **정확히 1회**, 보상형은 그 뒤 `ad_rewarded_end` 1회 / `ad_impression` 0회 |
 | A6 | 새 판 초기화 | 1판: 부활·코인 2배 사용 → 재시작해 2판에서 사망·결과 화면 | 2판에서도 부활 창·코인 2배 버튼이 다시 나옴, 같은 판 안에서는 두 번째 부활 없음 | 판마다 `run_start`의 `run_id`가 바뀌고 `ad_offer placement=revive` 1회 |
+| A7 | 늦은 보상 폐기 | 개발 빌드에서 `shownAd.Show`에 넘기는 보상 콜백 본문만 **15초 뒤 실행**되도록 임시 수정 → 보상형을 끝까지 보고 부활이 안 되는 것을 확인 → 광고가 다시 로드되면 결과 화면에서 코인 2배 광고를 열어 **15초를 넘긴 뒤** 도중에 닫는다 | 첫 광고는 유예 시간 뒤 `Skipped`로 끝나 부활하지 않고, 뒤늦게 도착한 첫 광고의 보상이 두 번째 광고를 `Rewarded`로 바꾸지 않는다(코인 2배 미지급) | 첫 표시 `ad_rewarded_end result=Skipped` → `ad_reward_late` 1회, 두 번째 표시도 `result=Skipped`. 임시 수정을 되돌린 뒤 A2를 다시 통과 |
 | P1 | 패스 구매 | always approves | 전면 광고 사라짐, 부활 즉시 | `iap_purchase Success`, `ad_rewarded_pass_skip` |
 | P1b | 패스 보유자 횟수 제한 | 패스 보유 상태에서 한 판에 두 번 사망 / 원격 `reviveEnabled` false 후 재실행 | 첫 사망만 즉시 부활, 두 번째는 부활 창 없이 결과 / 부활 창 없음 | 판당 `ad_rewarded_pass_skip placement=revive` 최대 1회 / 0회 |
 | P2 | 결제 거절 / 취소 | always declines / 창 닫기 | 소유 없음, 조용히 복귀 | `outcome=Failed` / `Cancelled` |
@@ -867,6 +932,7 @@ public class MonetizationBootstrap : MonoBehaviour
 | P5 | 재설치 | 삭제 → 스토어 재설치 | 패스 복원, 스타터 팩 코인 1회 재지급(정책) | `iap_entitlement` |
 | P6 | 환불 | Play Console 주문 관리에서 환불 → 재실행 | 패스 해제, 전면 광고 복귀 | `iap_revoked` |
 | P7 | 저장 실패 | 개발 빌드에서 세이브 경로를 쓰기 불가로 만들고(또는 저장 실패 강제 플래그) 스타터 팩 구매 → 복구 후 재실행 | 구매 콜백 `Pending`, 저장 실패 안내, 3분 안에 복구·재실행하면 코인 +3,000 한 번만, 환불 메일 없음 | `iap_entitlement_save_failed` → 재실행 후 `iap_entitlement newly_granted=true` 1회 |
+| P8 | 구버전 세이브 이관 | 25장 빌드로 스타터 팩을 산 세이브(또는 `version`이 직전 버전이고 `starterPackGranted: true`인 세이브 파일)를 기기에 넣고 이 장의 빌드로 실행 → 구매 복원 | 코인이 다시 늘지 않고 캐릭터도 중복되지 않으며, 스타터 팩은 이미 지급된 것으로 처리된다 | 에디터에서 `SaveMigrationTests`의 이관 2개 통과, 기기에서 `iap_entitlement newly_granted=false` |
 | R1 | 킬 스위치 / 원격 실패 | 원격 `interstitialEnabled`·`adFreeSkipsRewardedVideo` false → 재실행 / 이어서 비행기 모드로 재실행 | 전면 없음·상점에서 패스 숨김 / 그 값 유지 | `remote_config origin=Remote` / `Cached`·`Timeout` |
 | S1 | 릴리스 안전 / Steam 오염 | 릴리스 AAB, `forceTestAds=false` / Windows 빌드 | 테스트 광고 단위 요청 없음 / 부활·코인 2배·상점 없음 | 기기 로그 / 빌드 리포트에 GoogleMobileAds 네이티브 플러그인 없음 |
 
@@ -892,7 +958,7 @@ P4의 "3분 뒤 환불 메일 없음"은 확인이 스토어에 실제로 도달
 
 ### 확인하기
 
-1. 에디터 Play: 25장과 똑같이 가짜 광고·가짜 스토어로 동작하고, `EntitlementLedgerTests`가 통과합니다.
+1. 에디터 Play: 25장과 똑같이 가짜 광고·가짜 스토어로 동작하고, `EntitlementLedgerTests`와 10장 `SaveMigrationTests`(구버전 이관 2개 포함)가 모두 통과합니다.
 2. 내부 테스트 트랙으로 설치한 개발 빌드에서 동의 양식(EEA 강제 시) 뒤 "Test Ad" 보상형 광고를 끝까지 보면 부활합니다.
 3. 라이선스 테스터로 광고 제거 패스를 사면 결과→타이틀 전면 광고가 사라지고 부활 버튼이 즉시 작동합니다.
 4. 스타터 팩 결제 직후 강제 종료 → 재실행하면 코인이 정확히 3,000 늘고, 몇 분이 지나도 자동 환불되지 않습니다.
@@ -904,7 +970,7 @@ P4의 "3분 뒤 환불 메일 없음"은 확인이 스토어에 실제로 도달
 1. **증상**: Android 앱이 실행 즉시 종료된다. → **원인**: Google Mobile Ads 설정에 AdMob 앱 ID가 비었거나 EDM4U 의존성 해결을 안 함. → **해결**: `Assets > Google Mobile Ads > Settings`에 앱 ID를 넣고 Force Resolve 후 다시 빌드, 기기 로그(Logcat)에서 원인 메시지를 찾습니다.
 2. **증상**: 광고 보상 후 가끔 UI가 갱신되지 않거나 드물게 크래시. → **원인**: 메인 스레드가 아닌 콜백에서 `Time`·UI·`GameObject` 접근. → **해결**: 모든 광고·UMP 콜백 본문을 `MobileAdsEventExecutor.ExecuteInUpdate`로 감쌉니다.
 3. **증상**: 테스트 구매가 몇 분 뒤 환불 메일과 함께 사라진다. → **원인**: `ConfirmPurchase` 누락, 또는 지급 중 예외로 확인 줄에 도달하지 못함. → **해결**: 지급 → 저장 → 확인 순서를 지키고 지급 경로가 예외를 던지지 않게 합니다(원장은 순수 함수, `SaveSystem.Save`는 내부에서 예외를 잡음). 라이선스 테스터의 3분 규칙으로 회귀를 잡습니다.
-4. **증상**: 스타터 팩 코인이 앱을 켤 때마다 늘어난다. → **원인**: 복원 이벤트마다 지급하는데 원장 확인이 없거나, 원장 필드를 추가하고 세이브 버전을 올리지 않음. → **해결**: 모든 지급은 `EntitlementLedger.TryGrant`만 거치고, 저장 왕복 테스트를 유지합니다.
+4. **증상**: 스타터 팩 코인이 앱을 켤 때마다 늘어난다. → **원인**: 복원 이벤트마다 지급하는데 원장 확인이 없거나, 원장 필드를 추가하고 세이브 버전을 올리지 않음. → **해결**: 모든 지급은 `EntitlementLedger.TryGrant`만 거치고, 저장 왕복 테스트와 구버전 세이브 이관 테스트를 함께 유지합니다. 25장 세이브에서 올라온 사용자는 원장이 비어 있으므로 이관이 빠지면 복원 때마다 다시 지급됩니다.
 5. **증상**: 출시 후 "테스트 광고만 보인다"는 리뷰, 또는 개발 중 실제 광고 클릭으로 계정 경고. → **원인**: 테스트 ID 관리를 사람 기억에 맡김. → **해결**: 개발 빌드는 코드가 강제로 테스트 ID(`Debug.isDebugBuild`), 릴리스는 체크리스트 S1로 확인합니다. 신규 앱의 첫날 수익 0은 앱 준비 검토 때문일 수 있습니다.
 6. **증상**: 저장 공간이 부족한 기기에서 결제는 됐는데 재실행하면 스타터 팩 코인이 없고, 다시 결제되지도 않는다. → **원인**: `SaveSystem.Save`의 반환값(10장, 실패 시 false)을 무시하고 `ConfirmPurchase`를 불렀거나, 스토어 구현이 이벤트 발행 직후 스스로 확인함. 스토어는 끝난 거래로 기록해 다시 보내지 않습니다. → **해결**: 확인은 수신자가 저장 성공을 확인한 뒤 `ConfirmPurchase(PendingPurchase)`로만 합니다. 실패하면 확인하지 않고 `iap_entitlement_save_failed`를 기록하고 사용자에게 안내합니다. 에디터에서는 `SaveSystem.Save`가 false를 돌려주게 만든 뒤 가짜 스토어로 구매해 구매 콜백이 `Pending`이고 재시작 시 다시 전달되는지 확인합니다.
 7. **증상**: 패스 구매자가 "달라진 게 없다"며 환불을 요청한다. → **원인**: 원격 설정으로 효용을 모두 끈 상태에서 계속 판매. → **해결**: `StoreService.RemoveAdsHasValue`로 노출을 코드에서 강제하고 상품 설명을 설정과 함께 관리합니다.
@@ -948,7 +1014,7 @@ DAU가 늘어 LevelPlay 또는 AdMob 미디에이션을 검토합니다. 게임 
 
 <details><summary>힌트·해설</summary>
 
-작업: 새 `IAdService` 구현(동의 전달·보상 콜백·메인 스레드·재로드 백오프), 부트스트랩 생성 줄 교체, 스토어 개인정보 양식과 app-ads.txt 갱신. 실험: `MonetizationConfig.adProvider`를 두되 SDK 초기화는 시작 시 한 번 정해지므로 다음 실행부터 적용, 사용자 단위 배정, ARPDAU 주 지표·D1 보호 지표(25장 계획서 형식). 재수행: A1~A6과 S1 전부(새 구현이 `onShown`을 표시 1회당 한 번 부르는지 A5로 확인), 부트스트랩이 바뀌므로 P1·P1b·P4.
+작업: 새 `IAdService` 구현(동의 전달·보상 콜백·메인 스레드·재로드 백오프·**표시 단위 보상 확인**), 부트스트랩 생성 줄 교체, 스토어 개인정보 양식과 app-ads.txt 갱신. 미디에이션은 보상과 닫힘의 순서·지연이 공급자마다 다를 수 있으므로, 새 구현에서도 보상이 어느 표시의 것인지 확인하는 부분을 반드시 옮깁니다. 실험: `MonetizationConfig.adProvider`를 두되 SDK 초기화는 시작 시 한 번 정해지므로 다음 실행부터 적용, 사용자 단위 배정, ARPDAU 주 지표·D1 보호 지표(25장 계획서 형식). 재수행: A1~A7과 S1 전부(새 구현이 `onShown`을 표시 1회당 한 번 부르는지 A5로, 늦은 보상이 다음 광고에 새지 않는지 A7로 확인), 부트스트랩이 바뀌므로 P1·P1b·P4.
 
 </details>
 
@@ -970,11 +1036,11 @@ DAU가 늘어 LevelPlay 또는 AdMob 미디에이션을 검토합니다. 게임 
 
 </details>
 
-**3. 광고 콜백에서 `MobileAdsEventExecutor.ExecuteInUpdate`를 쓰는 이유와, 보상형에서 "닫힘 후 유예 시간"을 두는 이유는?**
+**3. 광고 콜백에서 `MobileAdsEventExecutor.ExecuteInUpdate`를 쓰는 이유와, 보상형에서 "닫힘 후 유예 시간"을 두는 이유는? 유예 시간 때문에 새로 생기는 문제는 무엇이고 어떻게 막나요?**
 
 <details><summary>모범 답안</summary>
 
-플러그인의 광고 이벤트는 메인 스레드가 아닌 곳에서 올 수 있고 Unity API는 메인 스레드에서만 안전하므로 작업을 다음 Update로 넘깁니다. `RaiseAdEventsOnUnityMainThread`는 obsolete이며 백그라운드 중 이벤트 지연 문제가 있습니다. 보상 신호와 닫힘 신호는 따로 비동기로 전달되어 순서를 믿을 수 없으므로, 닫힘만 보고 즉시 "보상 없음"으로 확정하면 늦게 온 보상을 잃습니다. 그래서 닫힘 후 짧게 기다린 뒤 확정합니다.
+플러그인의 광고 이벤트는 메인 스레드가 아닌 곳에서 올 수 있고 Unity API는 메인 스레드에서만 안전하므로 작업을 다음 Update로 넘깁니다. `RaiseAdEventsOnUnityMainThread`는 obsolete이며 백그라운드 중 이벤트 지연 문제가 있습니다. 보상 신호와 닫힘 신호는 따로 비동기로 전달되고 기본 Google 광고 밖(미디에이션)에서는 순서를 장담할 수 없으므로, 닫힘만 보고 즉시 "보상 없음"으로 확정하면 늦게 온 보상을 잃습니다. 그래서 닫힘 후 짧게 기다린 뒤 확정합니다. 대신 유예 시간을 두는 만큼 "끝난 표시의 늦은 보상"이 생길 수 있으므로, 보상 콜백은 자기가 속한 표시의 광고(`shownAd == rewarded`)인지 확인하고 아니면 버립니다. 유예 시간은 늦은 보상을 구제하는 장치이지, 임의의 지연까지 보장하는 장치가 아닙니다.
 
 </details>
 
@@ -989,7 +1055,8 @@ DAU가 늘어 LevelPlay 또는 AdMob 미디에이션을 검토합니다. 게임 
 ## 핵심 요약
 
 - 모바일 확장은 Steam판 출시 후의 선택 트랙입니다. 계정·검토 대기(Play Console 테스트 요건, AdMob 앱 준비 검토)가 개발보다 길 수 있으니 먼저 엽니다.
-- 광고는 AdMob 하나로 시작합니다. UMP 동의 → `CanRequestAds()` → `MobileAds.Initialize` 순서, 콜백은 `ExecuteInUpdate`, 개발 빌드는 코드가 강제로 공식 테스트 광고 단위를 씁니다.
+- 광고는 AdMob 하나로 시작합니다. UMP 동의 → `CanRequestAds()` → `MobileAds.Initialize` 순서, 콜백은 `ExecuteInUpdate`, 개발 빌드는 코드가 강제로 공식 테스트 광고 단위를 씁니다. 열림·닫힘·실패는 물론 **보상 콜백까지 어느 표시의 것인지 확인**해, 끝난 광고의 늦은 보상이 다음 광고의 결과가 되지 않게 합니다.
+- 세이브 구조를 바꿀 때는 구버전 세이브 샘플로 이관 테스트를 함께 씁니다. 25장 `starterPackGranted`를 새 원장으로 옮기는 단계가 빠지면 기존 구매자에게 스타터 팩이 두 번 지급됩니다.
 - Unity IAP 5는 `StoreController` 이벤트 기반입니다. 구현은 25장 `IStoreService` 계약대로 `PurchasePending`만 발행하고, 수신자가 **지급 → `SaveSystem.Save` 성공 확인 → `ConfirmPurchase`** 순서를 지킵니다. 저장이 실패하면 확인하지 않고(`Pending`, 사용자 안내, `iap_entitlement_save_failed`) 다음 실행에 재처리하며, 지급은 `EntitlementLedger`로 멱등하게 만듭니다.
 - 재설치는 `FetchPurchases`(iOS는 복원 버튼), 환불은 다음 조회에서 소유 해제로 반영합니다. 재설치 시 코인 재지급 같은 정책은 문서로 결정합니다.
 - 광고 제거 상품은 실제 효용(전면 광고 제거 + 보상형 즉시 지급)이 있을 때만 노출하고, 설정이 바뀌면 코드가 상품을 숨깁니다.

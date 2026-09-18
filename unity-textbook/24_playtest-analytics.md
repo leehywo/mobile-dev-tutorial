@@ -6,8 +6,10 @@
 > - "무엇을 알고 싶은가"에서 출발해 이벤트 사양(이름·파라미터·네이밍 규칙)을 설계한다
 > - SDK 없이도 동작하는 `Analytics` 정적 래퍼와 로컬 JSONL 로거를 구현하고, 23장까지의 실제 코드에 이벤트를 심어 사망 분포·선택 비율·순차 퍼널을 집계한다
 > - 세션·날짜·판의 정의를 정하고 퍼널과 리텐션(D1/D7)을 정의대로 계산하며, 동의·철회·삭제 흐름을 구현한다
+> - **"몇 판째에 새로움이 끝나는가"**(콘텐츠 고갈)와 **빌드 다양성**을 재는 이벤트·지표를 설계하고 집계 코드를 만든다
+> - 증상 → 진단 → 수정 → **재측정**까지 한 바퀴를 돌려, 바뀐 것과 **바뀌지 않은 것**을 함께 기록한다
 >
-> **선수 장**: 10, 21, 22, 23 · **예상 시간**: 6~7시간 (실제 테스트 진행 시간 제외) · **코인 러시 진행**: 이벤트 로그(로컬 JSONL, 판 단위 `run_id`), 이벤트 사양 표, 로그 집계 에디터 도구, 5인 플레이테스트 계획서와 분석 보고서
+> **선수 장**: 10, 21, 22, 23 · **예상 시간**: 8~9시간 (실제 테스트 진행 시간 제외) · **코인 러시 진행**: 이벤트 로그(로컬 JSONL, 판 단위 `run_id`), 이벤트 사양 표, 로그 집계 에디터 도구, 신규 경험·빌드 다양성 지표, 5인 플레이테스트 계획서와 분석 보고서, 0.4.2 수정 후 재측정 보고서
 
 ## 왜 필요한가
 
@@ -18,6 +20,8 @@
 - 코인 제단을 "보기는" 하는가? 봤다면 왜 안 샀는가?
 - 3분에 죽은 사람이 "한 판 더"를 누르는가, 게임을 끄는가?
 - 조작이 불편하다는 사람은 무엇이 불편한가?
+- 4판째에도 처음 보는 것이 남아 있는가, 아니면 다 본 게임을 반복하고 있는가?
+- 매 판 다른 빌드로 노는가, 늘 같은 세 장을 고르는가?
 ```
 
 그리고 개발자 본인은 이 질문에 답할 수 없는 유일한 사람입니다. 규칙을 모두 알고, 어디서 적이 나오는지 외우고 있으니까요. 이 장은 두 도구를 만듭니다. **사람을 관찰하는 플레이테스트**(왜 그렇게 하는가)와 **행동을 세는 애널리틱스**(얼마나 많이 그렇게 하는가)입니다. 둘은 서로의 빈틈을 채웁니다.
@@ -180,6 +184,27 @@ Dn 리텐션 = (Day 0에 처음 실행한 사용자 중, 정확히 n일째 날�
 
 D1은 첫인상과 온보딩, D7은 메타 루프(다시 올 이유)의 건강을 보여주는 신호로 주로 읽습니다. Steam 유료 게임에서는 리텐션보다 **플레이 시간 분포와 환불 전 이탈**이 더 중요할 수 있습니다.
 
+### 새로움이 끝나는 지점: 콘텐츠 고갈 지표
+
+23장은 **봇의 지갑**으로 "몇 판째에 살 것이 없어지는가"를 쟀습니다. 사람 쪽에는 그것과 짝이 되는 질문이 있습니다 — **"몇 판째에 볼 것이 없어지는가"**. 서바이버라이크를 다시 켜는 이유는 대개 "다음 판은 다르게 풀린다"는 기대이므로, 이 기대가 언제 마르는지 재지 않으면 "출시 2주 뒤 플레이 시간이 급감했다"를 사후에 알게 됩니다.
+
+세 지표로 봅니다. 앞의 둘은 이 장에서 이벤트를 새로 심어야 하고, 셋째는 23장에서 정의한 지표를 **이미 있는 `level_up`·`shrine_visit` 로그로** 계산합니다.
+
+| 지표 | 정의 | 필요한 이벤트 | 판단 기준 (코인 러시) | 표본 요건 |
+|---|---|---|---|---|
+| **판 수별 진행률** | n번째 판을 시작한 사용자 중 n+1번째 판을 시작한 비율 | `run_start`(`run_index`) | 어느 한 판에서 **70% 미만**으로 떨어지면 그 판의 경험을 본다 | 수백 명. **대면 테스트로는 못 잰다** |
+| **판당 신규 경험 비율** | 그 판에서 처음 본 것의 수 ÷ 그 판까지 누적으로 처음 본 것의 수 | `first_seen`, `run_end`(`new_seen`) | **3판째 20% 미만**이면 새 콘텐츠를 만들기 전에 조합(빌드)으로 새로움을 만들 수 있는지 먼저 본다 | 5명부터 경향이 보임 |
+| **빌드 유사도** | 같은 사람의 서로 다른 판 빌드 벡터 코사인 유사도 중앙값 (23장 정의) | `level_up`(`choice`), `shrine_visit`(`purchased`, `choice`) | **0.85 이상**이면 매 판 같은 게임 | 1인당 3판 이상 |
+
+```
+판당 신규 경험 비율(판 n) = (판 n에서 처음 본 것의 수) ÷ (판 1..n에서 처음 본 것의 누적 수)
+  → 1판은 정의상 항상 100%. 2판째 값이 곧 "첫 판이 새로움의 몇 %를 써 버렸는가"
+```
+
+"처음 본 것"의 목록은 미리 정해 둡니다. 코인 러시는 **적 종류(8 — 22장 10단계에서 폭탄충·주술사가 늘어 6종에서 8종이 됐습니다)**, **레벨업·제단 카드 종류(7)**, **영구 강화 레벨(3종 × 10)** 셋입니다. 목록에 없는 것을 나중에 끼워 넣으면 과거 판의 분모가 달라져 비교가 끊깁니다(이벤트 이름을 바꾸지 않는 것과 같은 이유).
+
+**표본의 한계를 미리 적어 둡니다.** 대면 5인 테스트는 진행 시간이 정해져 있어 "몇 판째에 그만두는가"를 볼 수 없습니다. 45분짜리 세션에서 4판을 한 것은 재미의 신호가 아니라 **일정의 결과**입니다. 그래서 판 수별 진행률은 데모·출시 로그에서만 쓰고, 대면 테스트에서는 신규 경험 비율과 빌드 유사도만 봅니다. 데모 단계의 재방문·완주 판정이 35장 게이트 L3이고, 그 숫자를 만드는 것이 여기서 심는 이벤트입니다.
+
 ### 서비스 선택과 래퍼
 
 | 서비스 | 특징 | 코인 러시에서 |
@@ -208,11 +233,12 @@ D1은 첫인상과 온보딩, D7은 메타 루프(다시 올 이유)의 건강�
 |---|---|---|---|---|
 | `session_start` | 동의 후 앱 시작·동의 직후·30분 이상 백그라운드 후 복귀 | `first_open`(bool), `reason`(string: launch/consent/resume), `local_date`(string) | 리텐션 D1/D7 계산의 기준 | D1 25% 미만이면 온보딩 재검토 |
 | `run_start` | 판 시작 (`StartGame`에서만) | `meta_damage_lv`, `meta_hp_lv`, `meta_magnet_lv`(int) | 몇 판째에 이탈하는가 | 2판째 시작률 60% 미만이면 결과 화면 개선 |
-| `run_end` | 정산 (사망·클리어·중도 종료) | `duration_s`(float), `cause`(string: 적 에셋 이름/`clear`/`quit`), `level`(int), `coins_collected`(int), `coins_banked`(int), `shrine_purchases`(int) | 언제 무엇에 죽는가, 실제 클리어율 | 한 분에 사망 30% 이상 집중 시 웨이브 조정. 23장 시뮬레이터 계수 보정 |
-| `level_up` | 레벨업 선택 완료 | `level`(int), `choice`(string), `offered`(string, 쉼표 구분) | 선택이 한쪽으로 쏠리는가 | 제시됐을 때 선택률 70% 이상이면 그 강화의 **가치** 조정 |
+| `run_end` | 정산 (사망·클리어·중도 종료) | `duration_s`(float), `cause`(string: 적 에셋 이름/`clear`/`quit`), `level`(int), `coins_collected`(int), `coins_banked`(int), `shrine_purchases`(int), `new_seen`(int: 이 판에서 처음 본 것의 수) | 언제 무엇에 죽는가, 실제 클리어율, 판당 신규 경험 | 한 분에 사망 30% 이상 집중 시 웨이브 조정. 23장 시뮬레이터 계수 보정 |
+| `level_up` | 레벨업 선택 완료 | `level`(int), `choice`(string), `offered`(string, 쉼표 구분) | 선택이 한쪽으로 쏠리는가, 판마다 다른 빌드가 나오는가 | 23장 기준: 조건부 선택률 70% 이상 = 사실상 1택 → 그 강화의 **가치** 조정. 빌드 유사도 중앙값 0.85 이상 = 빌드 수렴 |
 | `shrine_visit` | 제단 창 닫힘 | `shrine_index`, `price`, `wallet`(int), `affordable`(bool), `hp_ratio`, `dwell_s`(float), `purchased`(bool), `choice`, `offered`(string) | 제단 결정이 상황에 따라 바뀌는가 | 21장 기준: 살 수 있었던 방문에서 구매·모으기를 모두 한 참가자 4/5 미만이면 조정 |
 | `upgrade_purchase` | 영구 강화 구매 | `upgrade_id`(string), `new_level`(int), `cost`(int), `bank_after`(int) | 메타 진행 속도가 목표와 맞는가 | 23장 캠페인 예측과 ±50% 이상 차이 시 계수 보정 → 비용 재조정 |
 | `tutorial_step` | 온보딩 단계 첫 완료 (설치당 1회) | `step`(int), `step_name`(string: first_move/first_level_up/upgrade_shop_open/first_upgrade_purchase) | 온보딩 어디서 이탈하는가 | 직전 대비 90% 미만 단계 수정 |
+| `first_seen` | 미리 정한 목록의 무언가를 **처음** 본 순간 (설치당 항목별 1회) | `kind`(string: enemy/upgrade/unlock), `id`(string: 에셋 이름 또는 `damage_4` 같은 강화 레벨) | 몇 판째에 새로움이 끝나는가 | 3판째 신규 경험 비율 20% 미만이면 빌드 다양성(23장)부터 점검 |
 
 모든 이벤트에는 래퍼가 공통 필드(`ts`, `session_id`, `user_id`, `app_version`, `platform`)를 붙이고, 판 안에서 일어난 이벤트에는 `run_id`, `run_index`, `run_time_s`(판 경과 초)를 추가로 붙입니다.
 
@@ -742,7 +768,74 @@ if (!movedOnce && MoveInput.sqrMagnitude > 0.01f)
 }
 ```
 
-에디터 연결: Player의 `PlayerContactDamage` **Recorder**에 `RunRecorder` 오브젝트를 드래그하고, `CoinShrine` 오브젝트에 `ShrineAnalytics`를 추가합니다. `RunAnalytics`와 `TutorialSteps`는 정적 클래스라 씬에 둘 것이 없습니다.
+⑥ **처음 본 것**: 콘텐츠 고갈 지표의 원자료입니다. 온보딩 단계와 달리 **항목마다** 설치당 한 번 기록하고, 판마다 개수를 세어 `run_end`에 싣습니다. 스폰될 때마다 불리므로 이번 실행에서 이미 확인한 키는 메모리에서 거릅니다. 파일: `Assets/_CoinRush/Scripts/Analytics/FirstSeen.cs`
+
+```csharp
+using System.Collections.Generic;
+using UnityEngine;
+
+/// <summary>미리 정한 목록(적·강화 카드·영구 강화 레벨)에서 "처음 본 것"을 설치당 한 번 기록한다.</summary>
+public static class FirstSeen
+{
+    private static readonly HashSet<string> checkedThisSession = new HashSet<string>();
+
+    /// <summary>이번 판에서 처음 본 것의 수 (run_end의 new_seen)</summary>
+    public static int CountThisRun { get; private set; }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        checkedThisSession.Clear();
+        CountThisRun = 0;
+    }
+
+    public static void BeginRun() => CountThisRun = 0;
+
+    /// <param name="kind">enemy / upgrade / unlock</param>
+    /// <param name="id">에셋 이름 또는 "damage_4" 같은 영구 강화 레벨</param>
+    public static void Report(string kind, string id)
+    {
+        if (Analytics.Consent != AnalyticsConsent.Granted || string.IsNullOrEmpty(id)) return;
+
+        string key = "seen_" + kind + "_" + id;
+        if (!checkedThisSession.Add(key)) return;      // 이번 실행에서 이미 확인함 (PlayerPrefs 접근을 줄인다)
+        if (PlayerPrefs.GetInt(key, 0) == 1) return;   // 이전 실행에서 이미 봤음
+
+        PlayerPrefs.SetInt(key, 1);
+        PlayerPrefs.Save();
+        CountThisRun++;
+        Analytics.Track("first_seen", ("kind", kind), ("id", id));
+    }
+}
+```
+
+세 곳에 한 줄씩 넣습니다. **"처음 겪은" 시점이 아니라 "처음 화면에 보인" 시점**으로 통일합니다(카드는 제시될 때, 적은 스폰될 때).
+
+```csharp
+// EnemySpawner.cs (22장) — 적을 스폰해 Init한 직후
+FirstSeen.Report("enemy", data.name);
+
+// LevelUpState.cs (11·23장) — PickThree 끝에 추가
+foreach (UpgradeData p in picks) if (p != null) FirstSeen.Report("upgrade", p.name);
+
+// CoinShrine.cs (23장) — PickOffers의 names.Add(offers[i].name); 다음 줄
+FirstSeen.Report("upgrade", offers[i].name);
+
+// UpgradeShop.cs (23장) — TryBuy의 Analytics.Track("upgrade_purchase", ...) 다음 줄
+FirstSeen.Report("unlock", $"{upgradeId}_{level + 1}");
+```
+
+`RunAnalytics`(②)도 두 줄 고칩니다.
+
+```csharp
+// OnRunStarted의 Analytics.SetRun(...) 다음 줄
+FirstSeen.BeginRun();
+
+// OnRunFinished의 Analytics.Track("run_end", ...) 마지막 파라미터로 추가
+("new_seen", FirstSeen.CountThisRun));
+```
+
+에디터 연결: Player의 `PlayerContactDamage` **Recorder**에 `RunRecorder` 오브젝트를 드래그하고, `CoinShrine` 오브젝트에 `ShrineAnalytics`를 추가합니다. `RunAnalytics`·`TutorialSteps`·`FirstSeen`은 정적 클래스라 씬에 둘 것이 없습니다.
 
 ### 5단계: 로그 집계 에디터 도구
 
@@ -768,9 +861,9 @@ public static class AnalyticsLocalReport
     [Serializable]
     public class Row
     {
-        public string name, ts, user_id, session_id, run_id, local_date, cause, choice, offered, upgrade_id;
+        public string name, ts, user_id, session_id, run_id, local_date, cause, choice, offered, upgrade_id, kind, id;
         public float duration_s, hp_ratio;
-        public int run_index, level, coins_banked, step, price, wallet;
+        public int run_index, level, coins_banked, step, price, wallet, new_seen;
         public bool first_open, purchased, affordable;
         [NonSerialized] public DateTime time;
     }
@@ -832,6 +925,7 @@ public static class AnalyticsLocalReport
             chosenCount[r.choice] = chosenCount.GetValueOrDefault(r.choice) + 1;
         }
         sb.AppendLine($"\n[level_up] {levelUps.Count}회 — 제시율(레벨업 중 제시) / 조건부 선택률(제시 중 선택) / 점유율(전체 선택 중)");
+        sb.AppendLine("  23장 기준: 조건부 선택률 70% 이상 = 3택1이 사실상 1택");
         foreach (var kv in offeredCount.OrderByDescending(kv => chosenCount.GetValueOrDefault(kv.Key)))
         {
             int chosen = chosenCount.GetValueOrDefault(kv.Key);
@@ -856,7 +950,93 @@ public static class AnalyticsLocalReport
         // 4) 순차 퍼널: 사용자별 시각순, 각 단계는 "이전 단계 이후 + 관측 기간 안"에 일어나야 인정
         AppendOrderedFunnel(sb, rows);
 
+        // 5) 콘텐츠 고갈: 판 수별 진행률과 판당 신규 경험 비율
+        AppendContentDepth(sb, rows);
+
+        // 6) 빌드 다양성: 23장에서 정의한 지표를 실제 로그로 (같은 BuildProfile.Similarity를 쓴다)
+        AppendBuildDiversity(sb, rows);
+
         Debug.Log(sb.ToString());
+    }
+
+    private static void AppendContentDepth(StringBuilder sb, List<Row> rows)
+    {
+        // (1) 판 수별 진행률 — 사용자별 "도달한 최대 run_index"만 있으면 계산된다
+        var deepest = rows.Where(r => r.name == "run_start" && !string.IsNullOrEmpty(r.user_id))
+                          .GroupBy(r => r.user_id)
+                          .ToDictionary(g => g.Key, g => g.Max(r => r.run_index));
+        sb.AppendLine($"\n[판 수별 진행률] 사용자 {deepest.Count}명 " +
+                      "(대면 테스트는 세션 길이가 정해져 있어 이탈로 읽으면 안 됨 — 데모·출시 로그용)");
+        int maxIndex = deepest.Count > 0 ? deepest.Values.Max() : 0;
+        for (int n = 1; n < Mathf.Min(maxIndex + 1, 11); n++)
+        {
+            int reached = deepest.Values.Count(m => m >= n);
+            int next = deepest.Values.Count(m => m >= n + 1);
+            sb.AppendLine($"  {n}판 시작 {reached}명 → {n + 1}판 시작 {next}명 " +
+                          $"({(reached > 0 ? next / (float)reached : 0f):P0})");
+        }
+
+        // (2) 판당 신규 경험 비율 = 그 판의 new_seen ÷ 그 판까지 누적 new_seen
+        var cumulative = new Dictionary<string, int>();
+        sb.AppendLine("[판당 신규 경험 비율] 그 판의 first_seen ÷ 그 판까지 누적 (사용자 평균, 1판은 정의상 100%)");
+        foreach (var g in rows.Where(r => r.name == "run_end" && r.run_index > 0)
+                              .GroupBy(r => r.run_index).OrderBy(g => g.Key))
+        {
+            var ratios = new List<float>();
+            foreach (Row r in g)                      // run_index 오름차순이므로 누적이 순서대로 쌓인다
+            {
+                string user = r.user_id ?? "?";
+                int total = cumulative.GetValueOrDefault(user) + r.new_seen;
+                cumulative[user] = total;
+                if (total > 0) ratios.Add(r.new_seen / (float)total);
+            }
+            if (ratios.Count > 0)
+                sb.AppendLine($"  {g.Key}판: {ratios.Average():P0}  " +
+                              $"(신규 {g.Sum(r => r.new_seen)}개 / {ratios.Count}판)");
+        }
+    }
+
+    private static void AppendBuildDiversity(StringBuilder sb, List<Row> rows)
+    {
+        // 한 판의 빌드 = 그 run_id의 level_up 선택 + 제단에서 실제로 산 선택
+        var builds = new Dictionary<string, Dictionary<string, int>>();
+        var owner = new Dictionary<string, string>();
+        foreach (Row r in rows)
+        {
+            bool counted = r.name == "level_up" || (r.name == "shrine_visit" && r.purchased);
+            if (!counted || string.IsNullOrEmpty(r.run_id) || string.IsNullOrEmpty(r.choice)) continue;
+            if (!builds.TryGetValue(r.run_id, out Dictionary<string, int> vector))
+                builds[r.run_id] = vector = new Dictionary<string, int>();
+            vector[r.choice] = vector.GetValueOrDefault(r.choice) + 1;
+            owner[r.run_id] = r.user_id ?? "?";
+        }
+
+        string[] kinds = builds.Values.SelectMany(v => v.Keys).Distinct().OrderBy(k => k).ToArray();
+        var similarities = new List<float>();
+        foreach (var user in owner.GroupBy(kv => kv.Value))            // 같은 사람의 판끼리만 비교
+        {
+            List<int[]> vectors = user.Select(kv => kinds.Select(k => builds[kv.Key].GetValueOrDefault(k)).ToArray())
+                                      .ToList();
+            for (int i = 0; i < vectors.Count; i++)
+                for (int j = i + 1; j < vectors.Count; j++)
+                    similarities.Add(BuildProfile.Similarity(vectors[i], vectors[j]));   // 23장 순수 C# 규칙 재사용
+        }
+        similarities.Sort();
+
+        sb.AppendLine($"\n[빌드 다양성] 빌드가 기록된 판 {builds.Count}개, 같은 사람의 판 쌍 {similarities.Count}개");
+        if (similarities.Count == 0) { sb.AppendLine("  1인당 2판 이상이 필요합니다."); return; }
+        sb.AppendLine($"  빌드 유사도 중앙값 {similarities[similarities.Count / 2]:0.00} " +
+                      "(23장 기준: 0.85 이상이면 매 판 같은 빌드)");
+        foreach (var user in owner.GroupBy(kv => kv.Value))
+        {
+            var totals = new Dictionary<string, int>();
+            foreach (var kv in user)
+                foreach (var pair in builds[kv.Key])
+                    totals[pair.Key] = totals.GetValueOrDefault(pair.Key) + pair.Value;
+            string id = user.Key.Length > 6 ? user.Key.Substring(0, 6) : user.Key;
+            sb.AppendLine($"  {id}: " + string.Join(", ", totals.OrderByDescending(kv => kv.Value)
+                                                                .Select(kv => $"{kv.Key} {kv.Value}")));
+        }
     }
 
     private static void AppendOrderedFunnel(StringBuilder sb, List<Row> rows)
@@ -909,7 +1089,7 @@ public static class AnalyticsLocalReport
 }
 ```
 
-`GetValueOrDefault`와 `Split(char, StringSplitOptions)` 오버로드는 Unity 6의 .NET Standard 2.1 API 호환성 수준에서 사용할 수 있습니다. 프로젝트의 Api Compatibility Level을 바꿨다면 확인하세요.
+`GetValueOrDefault`와 `Split(char, StringSplitOptions)` 오버로드는 Unity 6의 .NET Standard 2.1 API 호환성 수준에서 사용할 수 있습니다. 프로젝트의 Api Compatibility Level을 바꿨다면 확인하세요. 빌드 유사도는 23장 `BuildProfile.Similarity`를 그대로 부릅니다 — **시뮬레이터가 쓰는 정의와 로그 집계가 쓰는 정의가 같아야** 두 결과를 나란히 놓을 수 있습니다(23장 "하나의 규칙, 두 실행기"와 같은 이유).
 
 ### 6단계: 5인 플레이테스트 계획서 (완성본)
 
@@ -961,11 +1141,11 @@ public static class AnalyticsLocalReport
 **로그 집계 (AnalyticsLocalReport 출력 요약)**
 
 ```
-이벤트 214개, 사용자 5명, 제외한 줄 1개
+이벤트 299개, 사용자 5명, 제외한 줄 1개
   제외: events_20261002.jsonl:58 (ArgumentException)      ← P4 기기 강제 종료로 잘린 마지막 줄
 [run_end] 16판 (중도 종료 1), 평균 311초, 평균 이월 402
 0분 0 | 1분 1 | 2분 2 | 3분 5 | 4분 1 | 5분 0 | 6분 3 | 7분 1 | 8분 0 | 9분 1 | 클리어 1
-  원인 Enemy_EliteKnight: 6 / Enemy_Bat: 4 / Enemy_Skeleton: 3 / Enemy_KingGolem: 1 / quit: 1 / clear: 1
+  원인 Enemy_EliteKnight: 4 / Enemy_Bomber: 4 / Enemy_Bat: 3 / Enemy_Skeleton: 2 / Enemy_KingGolem: 1 / quit: 1 / clear: 1
 [level_up] 71회 — 제시율 / 조건부 선택률 / 점유율
   Upgrade_Projectile: 제시 34% / 선택 21/24 = 88% / 점유 30%
   ...
@@ -976,7 +1156,18 @@ public static class AnalyticsLocalReport
 [퍼널] 관측 기간 2시간, 기간 미달로 제외 0명
   1. 첫 실행 5 → 2. 첫 판 시작 5 → 3. 첫 레벨업 선택 5 → 4. 첫 판 종료 5 → 5. 두 번째 판 시작 5
   분기: 첫 판 종료 후 영구 강화 구매 3/5명
+[판 수별 진행률] 사용자 5명 (대면 테스트는 세션 길이가 정해져 있어 이탈로 읽으면 안 됨)
+  1판 5명 → 2판 5명 (100%) | 2판 5명 → 3판 5명 (100%) | 3판 5명 → 4판 1명 (20%)
+[판당 신규 경험 비율] 그 판의 first_seen ÷ 그 판까지 누적 (사용자 평균)
+  1판: 100% (신규 57개 / 5판)   2판: 23% (신규 17개 / 5판)
+  3판: 12% (신규 10개 / 5판)    4판: 6% (신규 1개 / 1판)
+[빌드 다양성] 빌드가 기록된 판 16개, 같은 사람의 판 쌍 13개
+  빌드 유사도 중앙값 0.91 (23장 기준: 0.85 이상이면 매 판 같은 빌드)
+  P1: Upgrade_Projectile 11, Upgrade_Damage 5, Upgrade_AttackSpeed 3, Upgrade_Magnet 1
+  P2: Upgrade_Projectile 9, Upgrade_AttackSpeed 4, Upgrade_Damage 3, Upgrade_MaxHp 1
 ```
+
+**3판 → 4판의 20%는 이탈이 아닙니다.** 자유 플레이 시간이 30분이라 대부분 3판에서 끝났습니다. 이 줄은 데모·출시 로그에서만 읽습니다(개념 절의 표본 요건).
 
 **관찰 기록 합치기 (태그별 빈도)**
 
@@ -984,6 +1175,7 @@ public static class AnalyticsLocalReport
 |---|---|---|
 | 제단 | 제단을 지나치거나, 멈춰도 가격만 보고 1초 안에 닫음. "비싸네" | 4/5 |
 | 난이도 | 3:00 엘리트 "갑자기 뭐가 튀어나왔어" (경고 문구를 못 봄) | 3/5 |
+| 난이도 | 2:05 폭탄충을 끌고 다니다 등 뒤에서 폭발. "내가 뭘 잘못한 거지?" (예고 원을 안 봄) | 4/5 |
 | 레벨업 | 투사체만 고름. "이게 제일 세 보여서" | 5/5 |
 | 메타 | 결과 화면에서 "확인"만 누르고 타이틀로 감. 강화 버튼을 못 찾음 | 2/5 |
 
@@ -992,9 +1184,11 @@ public static class AnalyticsLocalReport
 | 증상 (근거) | 원인 가설 | 처방 | 검증 방법 |
 |---|---|---|---|
 | 살 수 있었던 방문에서 선택이 바뀐 참가자 1/5 (기준 4/5 미달), 구매율 11%, "비싸네" 4명 | 창에 강화 이름만 있고 수치·이월 가치가 없어 비교할 근거가 없음 | 카드에 "피해 +25% (이번 판)", 창 하단에 "모으면: 공격력 강화까지 N코인 남음" 표시 | 다음 테스트의 참가자별 선택 변화, 설문 3번 |
-| 3:00 사망 5/13판, "갑자기" 3명 | 경고 문구가 화면 상단이라 시선(캐릭터 중심)에서 멀음 | 경고를 캐릭터 근처 + 등장 방향 화살표로 이동, 경고음 추가 | 3분 사망 비율, 설문 4번 |
+| 3:00 사망 5/15판(중도 종료 제외), "갑자기" 3명 | 경고 문구가 화면 상단이라 시선(캐릭터 중심)에서 멀음 | 경고를 캐릭터 근처 + 등장 방향 화살표로 이동, 경고음 추가 | 3분 사망 비율, 설문 4번 |
 | 투사체: 제시됐을 때 선택률 88%, 점유율 30% | 23장 DPS 표 예측과 일치 (초반 +100%). 제시되면 거의 항상 고름 = 선택의 가치가 압도적 | **가치 자체를 조정**: 투사체 +1마다 한 발 피해 −15% (`CombatStats` 규칙 수정 → 시뮬레이터 재실행). 출현 빈도만 낮추면 제시됐을 때 항상 고르는 문제는 그대로이므로 쓰지 않음 | 다음 테스트의 **조건부 선택률 60% 이하**, 제시율은 변경 전과 비슷한지 따로 보고 |
 | 첫 판 종료 후 영구 강화 구매 3/5 (분기) | 결과 화면 기본 버튼이 "확인"(타이틀행) | 결과 화면 기본 버튼을 "강화하러 가기"로 변경 | 퍼널 분기 비율, `tutorial_step` 3 도달 |
+| 빌드 유사도 중앙값 **0.91** (기준 0.85 초과), P1·P2 모두 투사체가 최다 | 지배 선택지 하나가 빌드를 결정 — 23장 프로파일 시뮬레이션의 "투사체 우선 64.1% vs 2위 25.6%"와 같은 방향 | 23장 12단계 수정(투사체 피해 페널티 + 생존 계열 계수 인상 + 자석 상한)을 빌드에 반영 | 다음 테스트의 **빌드 유사도 0.85 미만**, 투사체 조건부 선택률 60% 이하 |
+| 2판째 신규 경험 비율 **23%**, 3판째 12% | 첫 판이 새로움의 대부분을 소모. 적 6종·카드 7종이 1판에 거의 다 나옴 | **판단 보류** — 3판째 12%는 기준(20%) 미달이지만, 새 콘텐츠를 만들기 전에 "조합이 달라지면 새롭게 느끼는가"를 먼저 본다(위 행의 수정으로 검증) | 신규 경험 비율은 그대로일 것으로 예상. 대신 설문 5번에서 "다 본 것 같다"는 발화가 줄어드는지 |
 
 **결론 (성공 기준 대비)**
 
@@ -1004,10 +1198,73 @@ Q2 부분 실패 — 엘리트 사망자 5명 중 3명 "불공평" 언급. 경�
 Q3 실패 — 3/5. 결과 화면 버튼 수정
 공통: 3분 사망 5/15판(중도 종료 제외) — 23장 기준 가정의 3분 벽과 방향이 같음. 다만 5명·15판이라
       계수 보정에는 부족 → 사망 시각과 수집량을 누적해 23장 초보/기준/숙련 가정 중 어디에 가까운지 추적
+빌드: 유사도 0.91 — 23장 시뮬레이터의 지배 판정과 실플레이가 같은 방향. 12단계 수정을 0.4.2에 반영
+새로움: 3판째 신규 경험 12% — 기준 미달이지만 콘텐츠 추가는 보류(위 표)
 다음 테스트: 0.4.2, 새로운 5명, 같은 질문 + 같은 기준
 ```
 
 "Q1 실패"를 보고 제단을 없애지 않았다는 점에 주목하세요. 증상(사지 않음)의 원인 가설이 "제단이 재미없다"가 아니라 "정보가 안 보인다"이고, 그 가설은 싸게 검증할 수 있습니다. 폐기는 UI를 고친 뒤에도 기준에 못 미칠 때 고려합니다.
+
+### 7-1단계: 수정하고 다시 재기 (가상 결과 한 바퀴)
+
+7단계는 해석에서 멈췄습니다. 여기서 **수정 → 재측정**까지 한 바퀴를 돕니다. 한 바퀴를 끝까지 돌기 전에는 "고쳤다"고 말할 수 없습니다. 아래도 모두 **가상 결과**이고, 산식과 표본을 함께 적습니다.
+
+**0.4.2에 들어간 수정 (7단계 처방표에서 그대로)**
+
+| # | 무엇을 | 근거가 된 증상 | 재측정에서 볼 지표 |
+|---|---|---|---|
+| ① | 제단 카드에 "피해 +25% (이번 판)" 수치, 창 하단에 "모으면: 공격력 강화까지 N코인" 표시 | 살 수 있었던 방문 구매율 11%, "비싸네" 4명 | 참가자별 구매·모으기 전환 4/5, 구매율 20~80% |
+| ② | 엘리트 경고를 캐릭터 근처 + 등장 방향 화살표 + 경고음 | 3:00 사망 5/15판, "갑자기" 3명 | 3분 사망 비율, 설문 4번 |
+| ③ | 23장 12단계 수정: 투사체 +1마다 한 발 피해 −15%, 최대 체력 25→40, 재생 0.5→3, 방어 0.92→0.82, 자석 스택 상한 3 | 투사체 조건부 선택률 88%, 빌드 유사도 0.91 | 조건부 선택률 60% 이하, 유사도 0.85 미만 |
+| ④ | 결과 화면 기본 버튼을 "강화하러 가기"로 | 첫 판 종료 후 강화 구매 3/5 | 퍼널 분기 비율 |
+
+폭탄충 폭발 피해는 여기서 건드리지 않습니다 — 22장 11단계가 이미 v3에서 25 → 18로 낮췄고, 0.4.1 빌드가 그 값으로 측정된 것입니다. 같은 수치를 두 장에서 번갈아 만지면 어느 쪽 결과인지 알 수 없게 됩니다.
+
+**클리어율을 22장과 직접 비교하지 마세요.** 22장 11단계의 33%는 **설계자 본인**이 12판을 돌린 값이고, 여기의 1/16(0.4.1)·2/18(0.4.2)은 **처음 해 보는 사람 5명**의 값입니다. 22장이 클리어율 기준을 "작업 기준"이라고 못 박은 이유가 이것입니다. 두 숫자는 같은 지표가 아니고, 같아지면 오히려 이상합니다.
+
+**③은 한 묶음으로 들어갔습니다.** 시뮬레이터에서는 한 번에 하나씩(수정 A → 수정 B) 확인했지만, 사람에게는 반쯤 깨진 빌드를 쥐여 줄 수 없어 완성된 규칙을 넣었습니다. 그래서 재측정이 말할 수 있는 것은 **"묶음의 효과"**뿐이고, 어느 상수가 얼마나 기여했는지는 시뮬레이터 쪽 기록(`balance-log.md`)으로만 말합니다. 어느 쪽인지 헷갈리지 않게 보고서에 적어 둡니다.
+
+**재측정 (0.4.2, 새 참가자 5명, 18판 — 중도 종료 1, 이벤트 331개, 같은 진행·같은 성공 기준)**
+
+| 지표 | 기준 | 0.4.1 | **0.4.2** | 판정 |
+|---|---|---|---|---|
+| 살 수 있었던 제단 방문 구매율 | 20~80% | 9회 중 11% | **12회 중 42%** (5/12) | 충족 |
+| 구매·모으기를 모두 한 참가자 | 4/5 이상 | 1/5 | **3/5** | 미달 |
+| 투사체 **조건부** 선택률 | 60% 이하 | 24회 중 88% | **28회 중 46%** (13/28) | 충족 |
+| 투사체 제시율 (건드리지 않은 값) | 변동 없어야 | 71회 중 34% | **83회 중 34%** | 의도대로 |
+| 투사체 점유율 | — | 30% | **16%** | — |
+| **빌드 유사도 중앙값** | 0.85 미만 | 0.91 | **0.74** | 충족 |
+| 3분 사망 | 25% 이하 | 15판 중 5 (33%) | **17판 중 1 (6%)** | 충족 |
+| 폭탄충 사망 (2:00~4:00) | — | 15판 중 4 | **17판 중 1** | 22장 v3와 같은 방향 |
+| 엘리트 사망자 중 "불공평" 언급 | 절반 미만 | 5명 중 3 | **4명 중 1** | 충족 |
+| 첫 판 종료 후 영구 강화 구매 | 4/5 이상 | 3/5 | **5/5** | 충족 |
+| 2판째 신규 경험 비율 | — | 23% | **21%** | 변화 없음 |
+| 3판째 신규 경험 비율 | 20% 이상 | 12% | **13%** | 여전히 미달 |
+
+**바뀐 것**
+
+- **빌드가 갈라졌습니다.** 유사도 0.91 → 0.74. 참가자 5명의 최다 선택이 투사체 2명, 공격 속도 2명, 피해 1명으로 나뉘었습니다. 23장 시뮬레이션이 예측한 방향(단일 우선 프로파일 1위−2위 격차 38.5%p → 3.3%p)과 같습니다. 다만 **크기까지 맞았다고 말할 수는 없습니다** — 표본이 5명 18판입니다.
+- **제단 구매율이 11% → 42%.** 수치를 보여 주는 것만으로 결정이 생겼습니다. 7단계에서 "제단이 재미없다"가 아니라 "정보가 안 보인다"를 가설로 잡은 것이 맞았습니다.
+- **3분 벽이 사라졌습니다**(33% → 6%). 경고 수정(②)과 밸런스 수정(③)이 같이 들어갔으므로 어느 쪽 덕인지는 이 데이터로 못 가릅니다. 23장 시뮬레이션에서 ③만으로도 3분 사망이 23.9% → 6.1%로 줄었으니 ③의 기여가 크다고 **추정**만 합니다.
+
+**안 바뀐 것 — 이쪽이 더 중요합니다**
+
+- **Q1은 여전히 실패입니다.** 구매율은 목표 구간에 들어왔지만 "구매와 모으기를 모두 한 참가자"는 3/5로 기준 4/5에 못 미칩니다. 2명은 열두 번 중 한 번도 모으지 않았습니다(둘 다 "보이면 일단 산다"). **보조 지표가 통과했다고 주 기준을 통과로 바꾸지 않습니다.** 0.4.3에서는 "모으기"의 값을 보여 주는 쪽(다음 영구 강화까지 남은 코인 표시)을 더 키워 재테스트합니다.
+- **새로움 곡선은 그대로입니다**(2판째 23% → 21%, 3판째 12% → 13%). 당연합니다 — ①~④ 어느 것도 **볼 것을 늘리지 않았습니다.** 빌드가 갈라진 것과 "처음 보는 것이 남아 있는 것"은 다른 축입니다. 다만 설문 5번에서 "다 본 것 같다"는 발화가 2/5 → 0/5로 줄었고, 대신 "다음엔 공속으로 가 봐야지" 같은 **다음 판 계획**이 3/5에서 나왔습니다. 조합이 새로움의 일부를 대신할 수 있다는 신호이지만, 5명으로는 가설입니다.
+- **후반 사망이 늘었습니다**(7~8분 1/15 → 4/17). 23장 12단계가 예고한 그대로입니다(시뮬레이션에서 7~8분 사망 8.8% → 29.2%). 22장 11단계도 같은 방향을 봤습니다 — 폭탄충 피해를 낮춰 전반을 살리자 후반(보스·골렘 벽)이 남았습니다. 새로 생긴 증상이므로 다음 사이클의 1순위 후보로 올립니다.
+
+**보고서에 남기는 형식** — 한 바퀴를 돌 때마다 이 네 줄을 씁니다.
+
+```
+0.4.2 재측정 (2026-10-16, 새 참가자 5명 / 18판 / 이벤트 331개)
+  고침    : 제단 정보(①) → 구매율 11%→42% · 밸런스(③) → 빌드 유사도 0.91→0.74, 투사체 조건부 88%→46%
+  못 고침 : Q1 주 기준(구매·모으기 전환) 1/5→3/5, 기준 4/5 미달 — 0.4.3에서 "모으기" 쪽 정보 강화
+  안 변함 : 신규 경험 비율 (2판째 23%→21%) — 수정 중 볼 것을 늘린 것이 없으므로 예상대로
+  새 증상 : 7~8분 사망 1/15→4/17 (23장 시뮬레이션 7~8분 8.8%→29.2% 예고와 일치) — 다음 사이클 1순위
+  주의    : ③은 다섯 상수를 묶어 넣었으므로 상수별 기여는 시뮬레이터 기록으로만 말할 수 있음
+```
+
+**여기서 만든 지표가 35장 게이트 L2·L3의 재료입니다.** 35장의 L2(첫 판 완주율, 자발적 "한 판 더", 추천 의향 중앙값)는 이 장의 `run_end`·세션 마지막 질문·설문 6번으로, L3(데모 완주율, 7일 안 재방문)은 `run_end`(`cause="clear"`)와 `session_start`(`local_date`)로 계산합니다. 판 수별 진행률은 그때(200명 이상) 비로소 이탈로 읽을 수 있습니다.
 
 ### 확인하기
 
@@ -1018,6 +1275,9 @@ Q3 실패 — 3/5. 결과 화면 버튼 수정
 5. JSONL 파일 끝에 `{"name":"run_en`처럼 잘린 줄을 직접 붙여 넣고 **Local Report...** 를 실행하면 "제외한 줄 1개"와 파일명:줄 번호가 나오고 나머지 집계는 정상 출력된다.
 6. **복귀 세션**(모바일 실기기): 앱을 백그라운드로 보낸 뒤 테스트용으로 `NewSessionAfterBackgroundSeconds`를 60으로 줄이고 1분 뒤 돌아오면 `reason:"resume"`인 `session_start`가 새 `session_id`로 기록된다. 확인 후 값을 되돌린다.
 7. **철회**: 동의 상태에서 이벤트를 몇 개 발생시켜 버퍼에 남긴 뒤(20개 미만), 설정에서 동의를 끄고 앱을 종료한다. 파일에 **그 이벤트들도, 이후 이벤트도** 추가되지 않는다. "기록 삭제"를 누르면 `analytics` 폴더의 `.jsonl` 파일이 사라진다.
+8. **처음 본 것**: 새 프로필(설정 → 기록 삭제 + PlayerPrefs 초기화)로 첫 판을 하면 `first_seen`이 여러 줄 찍히고, **같은 적·같은 카드는 두 번째 판에서 다시 찍히지 않는다.** `run_end`의 `new_seen`이 1판에서 가장 크고 판이 갈수록 줄어든다.
+9. **신규 경험 비율**: **Local Report...** 의 `[판당 신규 경험 비율]`에서 **1판이 항상 100%**이고 이후 단조 감소한다(정의상 그래야 한다. 오르면 `new_seen` 집계나 `run_index`가 잘못된 것이다).
+10. **빌드 다양성**: 한 판에서 같은 강화만 3번 고르고 다른 판에서 다른 강화만 3번 고르면, `[빌드 다양성]`의 유사도가 0.00에 가깝게 나온다. 같은 강화만 두 판 고르면 1.00이 나온다.
 
 ## 흔한 실수
 
@@ -1029,6 +1289,10 @@ Q3 실패 — 3/5. 결과 화면 버튼 수정
 6. **증상**: 한 판에 `run_start`가 10개 넘게 찍혀 2판째 시작률이 1,000%로 나온다. → **원인**: "Playing 상태 진입"에서 기록했는데 레벨업 복귀·부활도 Playing에 다시 들어옴. → **해결**: 판 시작은 `GameStateMachine.StartGame` → `RunRecorder.BeginRun` 한 곳에서만 발생시키고, 판 안 이벤트는 `run_id`로 묶습니다.
 7. **증상**: 설정에서 수집을 껐는데 종료 직전 이벤트 몇 줄이 파일에 남는다. → **원인**: 철회가 동의 값만 바꾸고 대기 버퍼를 비우지 않아, 종료·백그라운드의 `Flush`가 그대로 기록. → **해결**: 철회 시 모든 백엔드의 `DiscardPending`을 호출하고 `Flush`도 동의 상태를 확인합니다.
 8. **증상**: 스토어 심사에서 개인정보 항목이 실제 수집과 다르다고 지적받았다. → **원인**: 서드파티 SDK(분석·광고)가 수집하는 항목을 빠뜨림. → **해결**: 각 SDK 문서의 데이터 수집 목록을 확인해 App Privacy·데이터 보안 양식에 반영합니다.
+9. **증상**: 5인 대면 테스트에서 "3판째에 80%가 이탈했다"고 보고서에 썼다. → **원인**: 자유 플레이 시간이 30분이라 대부분 3판에서 **시간이 끝난** 것입니다. 일정이 만든 숫자를 행동으로 읽었습니다. → **해결**: 판 수별 진행률은 세션 길이를 통제하지 않는 표본(데모·출시 로그, 수백 명)에서만 씁니다. 대면 테스트에서는 신규 경험 비율과 빌드 유사도처럼 **세션 길이에 덜 휘둘리는 지표**를 봅니다.
+10. **증상**: 수정 후 재측정에서 보조 지표가 통과해 "해결"로 적었는데 다음 테스트에서 같은 문제가 또 나왔다. → **원인**: 성공 기준을 **테스트 전에** 정해 놓고, 통과한 쪽만 골라 읽었습니다(제단 구매율은 통과, 구매·모으기 전환은 미달). → **해결**: 재측정 보고서를 "고침 / 못 고침 / 안 변함 / 새 증상" 네 칸으로 고정합니다. 주 기준이 미달이면 보조 지표가 아무리 좋아도 미달입니다.
+11. **증상**: 여러 수정을 한 빌드에 묶어 넣고 "이 수정 덕분에 좋아졌다"고 결론 냈다. → **원인**: 사람 테스트는 한 번에 하나씩 바꾸기 어렵다는 현실 때문에 묶음 배포는 정상이지만, 해석까지 묶으면 안 됩니다. → **해결**: 상수 단위의 기여는 23장 시뮬레이터에서 하나씩 확인해 `balance-log.md`에 남기고, 플레이테스트 보고서에는 **"묶음의 효과"**라고 명시합니다.
+12. **증상**: 출시 6개월 뒤 "언제부터 지루해졌는지" 물었는데 답할 데이터가 없다. → **원인**: `first_seen`의 대상 목록을 출시 후에 바꿔 과거 판의 분모가 달라졌습니다. → **해결**: 대상 목록(적·카드·강화 레벨)을 사양 표에 못 박고, 콘텐츠를 추가하면 **목록을 바꾸는 대신 새 `kind`를 추가**해 옛 곡선을 보존합니다.
 
 ## 연습 문제
 
@@ -1065,6 +1329,24 @@ Q3 실패 — 3/5. 결과 화면 버튼 수정
 <details><summary>힌트·해설</summary>
 
 가장 어려운 부분은 "새로운 5명"을 구하는 것입니다. 첫 테스트 참가자는 이미 규칙을 알기 때문에 재테스트 대상이 아닙니다. 모집 경로(커뮤니티, 게임잼 동료, itch.io 페이지 댓글)를 2~3개 미리 확보하세요. 보고서에는 기준을 바꾸지 않았다는 것을 명시하고, 기준 자체가 잘못됐다고 판단되면 "기준 변경"을 별도 항목으로 이유와 함께 기록합니다.
+
+</details>
+
+**5. ★★☆ 콘텐츠 고갈 지표 설계**
+코인 러시에 캐릭터 2종이 추가됐습니다(23장 연습 4). `first_seen`의 대상 목록을 어떻게 바꿔야 과거 데이터의 신규 경험 곡선이 끊기지 않는지 설명하고, 캐릭터별로 빌드가 갈라지는지 확인할 집계를 설계하세요.
+
+<details><summary>힌트·해설</summary>
+
+기존 `kind`(enemy/upgrade/unlock)의 **정의를 바꾸지 않고** `kind: "character"`를 추가합니다. 옛 세 종류의 분모는 그대로이므로 출시 전 곡선과 출시 후 곡선을 같은 기준으로 이어 붙일 수 있고, 전체 곡선은 세 종류 합과 네 종류 합을 **따로** 그립니다(같은 그래프에 섞으면 캐릭터 추가 시점에 인위적인 반등이 생깁니다). 빌드 비교는 `run_start`에 `character_id` 파라미터를 추가한 뒤 `AppendBuildDiversity`를 캐릭터별로 나눠 돌립니다. 볼 것은 두 가지입니다 — 같은 캐릭터 안의 판 유사도(그 캐릭터가 매 판 같은 빌드를 강요하는가)와 **캐릭터 사이의 유사도**(캐릭터를 바꿔도 같은 빌드가 나오면 캐릭터가 아니라 스킨입니다). 23장 연습 4의 "캐릭터별 클리어율 ±10%p" 기준과 함께 보면 파워 크립과 다양성을 동시에 판정할 수 있습니다.
+
+</details>
+
+**6. ★★★ 재측정 계획서 쓰기**
+7-1단계의 "못 고침"(구매·모으기 전환 3/5)을 고치기 위한 0.4.3 수정안 하나와, 그 수정이 성공했는지 판정할 **테스트 전 기준**을 쓰세요. 기준에는 실패 조건(무엇이 나오면 이 가설을 버리는가)도 포함해야 합니다.
+
+<details><summary>힌트·해설</summary>
+
+수정안 예: "제단 창의 '모으기' 버튼 옆에 '이 판을 마치면 +N코인 → 공격력 5레벨까지 M코인 남음'을 상시 표시". 기준 예: (성공) 살 수 있었던 방문에서 구매와 모으기를 각각 한 번 이상 한 참가자 **4/5 이상**, 그중 3명 이상이 체력·지갑·다음 판 목표로 이유를 설명. (실패) 구매율이 20% 미만으로 떨어지거나(정보가 "사지 마라"로 읽힘) 전환 참가자가 여전히 3/5 이하. 실패 조건을 미리 쓰는 이유는 21장 그레이박스·29장 킬 기준과 같습니다 — 결과를 본 뒤 기준을 정하면 무엇이든 "개선"으로 읽을 수 있습니다. 두 번 연속 실패하면 정보 부족 가설을 버리고 **제단 자체의 트레이드오프 크기**(23장 `shrineStacks`·가격)를 다음 가설로 옮깁니다.
 
 </details>
 
@@ -1110,6 +1392,22 @@ D1은 첫 실행 다음 날 돌아온 비율이라 첫인상, 온보딩, 첫 세
 
 </details>
 
+**6. "몇 판째에 새로움이 끝나는가"를 5인 대면 테스트에서 재려고 합니다. 세 지표 중 무엇을 쓰고 무엇을 쓰면 안 되나요?**
+
+<details><summary>모범 답안</summary>
+
+쓸 수 있는 것은 **판당 신규 경험 비율**(그 판의 `first_seen` ÷ 누적)과 **빌드 유사도**입니다. 둘 다 한 사람이 몇 판을 했는지와 비교적 무관하게 "판이 거듭될수록 어떻게 변하는가"를 보여 주기 때문입니다. 쓰면 안 되는 것은 **판 수별 진행률**입니다. 대면 테스트는 자유 플레이 시간이 정해져 있어 3판에서 끝난 것이 재미가 아니라 **일정** 때문이고, 이것을 이탈률로 읽으면 없는 문제를 만들어 냅니다. 판 수별 진행률은 세션 길이를 통제하지 않는 표본(데모·출시 로그, 수백 명)에서만 의미가 있고, 그 값이 35장 게이트 L3의 재방문 판정 재료가 됩니다.
+
+</details>
+
+**7. 수정 후 재측정에서 "안 바뀐 것"을 따로 적는 이유는?**
+
+<details><summary>모범 답안</summary>
+
+바뀐 것만 적으면 모든 사이클이 성공으로 보이고, 실제로는 **다른 축의 문제가 그대로 남아 있다는 정보**를 잃습니다. 코인 러시 0.4.2에서는 빌드 유사도가 0.91 → 0.74로 갈라졌지만 신규 경험 비율(2판째 23% → 21%)은 그대로였습니다. 수정 어느 것도 "볼 것"을 늘리지 않았으니 당연한 결과이고, 이것을 적어 두어야 "조합 다양성"과 "콘텐츠 양"이 다른 축이라는 것을 다음 사이클에서 잊지 않습니다. 또 주 기준이 미달인데 보조 지표가 통과했을 때(구매율 42% 통과, 구매·모으기 전환 3/5 미달) 미달을 명시해야 같은 문제로 세 번째 테스트를 낭비하지 않습니다. 보고서를 "고침 / 못 고침 / 안 변함 / 새 증상" 네 칸으로 고정하면 강제됩니다.
+
+</details>
+
 ## 핵심 요약
 
 - 플레이테스트는 "왜", 애널리틱스는 "얼마나"를 알려주며 서로의 빈틈을 채웁니다.
@@ -1119,6 +1417,11 @@ D1은 첫 실행 다음 날 돌아온 비율이라 첫인상, 온보딩, 첫 세
 - 이벤트 이름은 소문자 snake_case, 값은 이름이 아닌 파라미터로, 단위는 접미사로 표기하고 출시 후에는 바꾸지 않습니다.
 - 퍼널은 사용자별 시각순으로 "이전 단계 이후"만 인정하고 관측 기간을 적용하며, 순서가 강제되지 않는 행동은 분기로 따로 셉니다. 리텐션은 세션·날짜 정의(복귀 세션, 현지 날짜)와 코호트를 맞춰 비교합니다.
 - 선택 쏠림은 제시율·조건부 선택률·점유율을 따로 보고, 처방은 "제시 빈도"가 아니라 "선택의 가치"를 조정합니다.
+- 콘텐츠 고갈은 **판 수별 진행률 · 판당 신규 경험 비율 · 빌드 유사도** 세 가지로 재고, 표본이 지표를 고릅니다. 세션 길이가 정해진 대면 테스트에서 판 수별 진행률을 이탈로 읽으면 안 됩니다.
+- 빌드 다양성의 정의(코사인 유사도)는 23장 `BuildProfile.Similarity`를 그대로 씁니다. 시뮬레이터와 로그 집계가 같은 규칙을 쓸 때만 두 결과를 나란히 놓을 수 있습니다.
+- 한 사이클은 증상 → 진단 → 수정 → **재측정**까지입니다. 보고서는 **고침 / 못 고침 / 안 변함 / 새 증상** 네 칸으로 고정하고, 주 기준이 미달이면 보조 지표가 통과해도 미달로 적습니다.
+- 사람에게는 수정을 묶어서 배포할 수밖에 없으므로, 상수 단위의 기여는 23장 시뮬레이터 기록으로만 말하고 플레이테스트 보고서에는 "묶음의 효과"라고 밝힙니다.
+- 여기서 만든 지표가 35장 게이트 L2(완주율·재방문 행동·추천 의향)와 L3(데모 완주율·7일 재방문)의 계산 재료입니다.
 - `Analytics` 정적 래퍼 뒤에 백엔드를 숨기면 로컬 JSONL과 실제 SDK를 자유롭게 바꿀 수 있고, 동의·이름 규칙·공통 필드를 한 곳에서 강제합니다.
 - 동의 전에는 수집하지 않고, 최소 수집, 철회 시 대기 데이터 폐기와 이후 수집 중단, 저장 데이터 삭제 방법, 스토어 개인정보 양식 반영을 지킵니다.
 

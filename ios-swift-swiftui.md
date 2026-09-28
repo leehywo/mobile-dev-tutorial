@@ -1691,7 +1691,12 @@ enum WeatherError: LocalizedError {
     }
 }
 
-struct WeatherService {
+// ⭐ 테스트·Preview에서 가짜로 바꿔 끼우기 위한 프로토콜 (JS: 모듈을 직접 import하지 않고 주입받기)
+protocol WeatherFetching: Sendable {
+    func fetchWeather(city: String) async throws -> WeatherResponse
+}
+
+struct WeatherService: WeatherFetching {
     func fetchWeather(city: String) async throws -> WeatherResponse {
         var components = URLComponents(string: "https://api.openweathermap.org/data/2.5/weather")!
         components.queryItems = [
@@ -1737,7 +1742,11 @@ final class WeatherViewModel {
     }
 
     private(set) var state: State = .idle     // 외부에선 읽기 전용
-    private let service = WeatherService()
+    private let service: any WeatherFetching  // ⭐ 구체 타입이 아니라 프로토콜로
+
+    init(service: any WeatherFetching = WeatherService()) {   // 기본값이 실제 서비스라 호출부는 그대로
+        self.service = service
+    }
 
     func load(city: String) async {
         state = .loading
@@ -1755,6 +1764,18 @@ final class WeatherViewModel {
 
 > **`catch is CancellationError`를 빠뜨리면**: 사용자가 화면을 빨리 나갈 때
 > "작업이 취소되었습니다" 같은 에러가 번쩍 뜹니다. `.task`가 자동 취소를 해주는 대가입니다.
+
+> ⭐ **서비스를 ViewModel 안에서 `WeatherService()`로 직접 만들면** 테스트가 진짜 네트워크를 타게 됩니다.
+> 그래서 프로토콜(`WeatherFetching`)로 받고, 4-7 테스트에서는 가짜 서비스를 넣습니다.
+
+```swift
+// 순수 로직은 ViewModel 밖에 두면 테스트가 가장 쉽습니다 (4-7에서 그대로 테스트)
+enum Validator {
+    static func isValidCity(_ input: String) -> Bool {
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+```
 
 ### 화면 + NavigationStack
 
@@ -1919,33 +1940,57 @@ struct MemoListView: View {
     @Environment(\.modelContext) private var context
 
     var body: some View {
-        List {
-            ForEach(memos) { memo in
-                NavigationLink(value: memo) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(memo.title).font(.headline)
-                        Text(memo.content)
-                            .lineLimit(2)
-                            .foregroundStyle(.secondary)
+        NavigationStack {                                  // value 기반 링크는 Stack + destination이 한 세트
+            List {
+                ForEach(memos) { memo in
+                    NavigationLink(value: memo) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(memo.title).font(.headline)
+                            Text(memo.content)
+                                .lineLimit(2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
+                .onDelete { indexSet in
+                    for index in indexSet { context.delete(memos[index]) }
+                    // 저장은 자동입니다. 즉시 반영하려면 try? context.save()
+                }
             }
-            .onDelete { indexSet in
-                for index in indexSet { context.delete(memos[index]) }
-                // 저장은 자동입니다. 즉시 반영하려면 try? context.save()
+            .overlay {
+                if memos.isEmpty {
+                    ContentUnavailableView("메모 없음", systemImage: "note.text")
+                }
             }
-        }
-        .overlay {
-            if memos.isEmpty {
-                ContentUnavailableView("메모 없음", systemImage: "note.text")
+            .navigationTitle("메모")
+            .navigationDestination(for: Memo.self) { memo in   // ⭐ 이게 없으면 탭해도 아무 일도 안 일어남
+                MemoDetailView(memo: memo)
+            }
+            .toolbar {
+                Button("추가", systemImage: "plus") { addMemo() }
             }
         }
     }
+
+    // 추가 — context는 뷰 안에서만 쓸 수 있으니 메서드도 뷰 안에
+    private func addMemo() {
+        context.insert(Memo(title: "새 메모", content: ""))
+    }
 }
 
-// 추가
-func addMemo() {
-    context.insert(Memo(title: "새 메모", content: ""))
+// 상세/편집 — @Bindable로 모델을 직접 바인딩하면 타이핑이 곧 저장
+// (JS: controlled input인데 setState가 곧 DB write)
+struct MemoDetailView: View {
+    @Bindable var memo: Memo
+
+    var body: some View {
+        Form {
+            TextField("제목", text: $memo.title)
+            TextEditor(text: $memo.content)
+                .frame(minHeight: 200)
+        }
+        .navigationTitle(memo.title)
+    }
 }
 ```
 
@@ -3231,6 +3276,15 @@ Publishing changes from background threads is not allowed
 import Testing
 @testable import MyApp
 
+// 테스트용 가짜 서비스 — 네트워크 없이 즉시 응답 (JS: jest.fn().mockResolvedValue(...))
+struct FakeService: WeatherFetching {
+    func fetchWeather(city: String) async throws -> WeatherResponse {
+        WeatherResponse(main: .init(temp: 21, humidity: 40, feelsLike: 20),
+                        weather: [.init(description: "맑음", icon: "01d")],
+                        name: city)
+    }
+}
+
 @Test("도시 검색 성공하면 loaded 상태가 된다")
 @MainActor
 func loadSuccess() async {
@@ -3332,8 +3386,15 @@ Text("본문").font(.body)
 // ❌ 고정 크기는 큰 글씨 설정에서 그대로 작게 나옴
 Text("제목").font(.system(size: 24))
 
-// 고정 크기가 꼭 필요하면 relativeTo로 스케일링 연결
-.font(.system(size: 24, weight: .bold, design: .rounded))
+// 굵기·라운드 같은 디자인이 필요하면 "스타일 기반" 시스템 폰트 — 스케일링 유지 ✅
+.font(.system(.title, design: .rounded, weight: .bold))
+
+// 숫자 크기가 꼭 필요하면 @ScaledMetric으로 사용자 설정에 비례시키기 ✅
+@ScaledMetric(relativeTo: .title) private var titleSize: CGFloat = 24
+Text("제목").font(.system(size: titleSize, weight: .bold))
+
+// 커스텀 폰트 파일은 relativeTo로 텍스트 스타일에 연결 ✅
+.font(.custom("Pretendard-Bold", size: 24, relativeTo: .title))
 .dynamicTypeSize(...DynamicTypeSize.accessibility2)   // 상한만 두기
 
 // 글씨가 커지면 가로 배치를 세로로 바꾸기
@@ -3488,7 +3549,7 @@ File → New → File → App Privacy  (PrivacyInfo.xcprivacy)
 | 샘플 | 레벨 | URL | 추천 이유 |
 |---|---|---|---|
 | **Landmarks 튜토리얼** | 초급 | [developer.apple.com/tutorials/swiftui](https://developer.apple.com/tutorials/swiftui) | Apple 공식 SwiftUI 입문. 리스트/상세/지도/애니메이션까지 단계별. **가장 먼저 할 것** |
-| **Food Truck** | 중급 | [Apple Developer Documentation](https://developer.apple.com/documentation/swiftui/food_truck_building_a_swiftui_multiplatform_app) | SwiftUI 멀티플랫폼 + CloudKit + Live Activity + WidgetKit 통합 |
+| **Food Truck** | 중급 | [Apple Developer Documentation](https://developer.apple.com/documentation/swiftui/food_truck_building_a_swiftui_multiplatform_app) | SwiftUI 멀티플랫폼(iPad/Mac) + Swift Charts + Live Activity + WidgetKit. **2022 샘플이라 상태 관리는 구식 `ObservableObject`** — 구조·위젯·Live Activity 참고용 |
 | **Sample Code Library** | 전체 | [developer.apple.com/documentation/samplecode](https://developer.apple.com/documentation/samplecode) | 주제별 공식 샘플 검색. WWDC 세션 코드도 여기 |
 | **Backyard Birds** | 중급 | Apple Sample Code | SwiftData + 위젯 + IAP를 함께 쓴 최신 구성 |
 
@@ -3498,8 +3559,8 @@ File → New → File → App Privacy  (PrivacyInfo.xcprivacy)
 |---|---|
 | STEP 1 (UI 기초) | Landmarks Part 1: Creating and Combining Views |
 | STEP 2 (리스트) | Landmarks Part 4: Building Lists and Navigation |
-| STEP 3 (ViewModel·네비) | Food Truck (NavigationStack + @Observable) |
-| STEP 4 (저장) | Backyard Birds / Food Truck의 SwiftData 파트 |
+| STEP 3 (ViewModel·네비) | Backyard Birds (NavigationStack + SwiftData, iOS 17) |
+| STEP 4 (저장) | Backyard Birds의 SwiftData 파트 (Food Truck은 SwiftData 이전 샘플) |
 | 4-3 인앱 결제·구독 | StoreKit 공식 구매 흐름 / Backyard Birds의 IAP 구성 |
 
 **학습 팁:**
@@ -3556,6 +3617,357 @@ File → New → File → App Privacy  (PrivacyInfo.xcprivacy)
 
 > **디버깅 순서 습관화**: ① 콘솔에서 크래시 메시지 확인 → ② 스택트레이스에서 내 코드 찾기
 > → ③ Debug View Hierarchy / Memory Graph → ④ 그래도 모르면 AI에 전문 붙여넣기.
+
+## 4-14. iOS 네이티브로 가벼운 게임 만들기 (SpriteKit + 수익화)
+
+> Unity 없이, **유틸 앱을 만들던 스택 그대로**(SwiftUI + StoreKit 2 + Game Center) 가벼운 2D 게임을 만들고
+> 돈까지 버는 경로입니다. 이 절의 기준은 하나입니다 — **"가볍지만 돈은 벌어야 한다."**
+> 엔진을 새로 배우는 대신, 이미 아는 것 위에 게임 루프 하나를 얹습니다.
+
+### 네이티브가 맞는 게임 / Unity로 가야 하는 게임
+
+| 네이티브(SwiftUI/SpriteKit)가 맞는 게임 | Unity로 가야 하는 게임 → [Unity 트랙](./react-to-unity.md) |
+|---|---|
+| 2D 캐주얼·퍼즐·워드·카드·아이들(방치)·원버튼 아케이드 | 3D, AR/VR |
+| 세로 화면, 한 손 조작 | 복잡한 물리(래그돌, 차량, 유체) |
+| 세션 1~3분, 하루 여러 번 | **Android 동시 출시가 필수** |
+| 규칙으로 콘텐츠가 생성됨(레벨 수식·시드 랜덤) | 대용량 에셋, 레벨 에디터·아트 파이프라인이 필요 |
+
+**네이티브의 장점 (가벼운 게임에서는 결정적):**
+- 앱 용량이 **수 MB**. Unity는 빈 프로젝트도 수십 MB — 다운로드 전환율과 셀룰러 설치에 직접 영향
+- 엔진 런타임 요금·라이선스 없음. StoreKit 2 수수료 외에 나가는 돈이 없음
+- 4-3 StoreKit 2, 4-12 위젯·Live Activity, Game Center를 **그대로** 씀 — 브리지 플러그인 불필요
+- 유틸 앱과 **코드·개발자 계정·분석·결제 코드를 공유** — 한 사업으로 굴리기 쉬움
+- 심사·TestFlight·서명 과정이 4-4~4-10과 완전히 동일
+
+### 스택 선택 — 3단계
+
+| 게임 유형 | 스택 | JS 대응 |
+|---|---|---|
+| 턴제·퍼즐·워드·카드·아이들 | **순수 SwiftUI** (+ `withAnimation`, `TimelineView`, `Canvas`) | React 상태 + CSS 애니메이션 |
+| 실시간 2D 아케이드·물리·충돌 | **SpriteKit** — SwiftUI 안에 `SpriteView`로 삽입 | `<canvas>` + `requestAnimationFrame` + matter.js |
+| 3D | SceneKit/RealityKit — 권장하지 않음 → Unity | three.js |
+
+> 대부분의 "돈 되는 가벼운 게임"(2048류, 워드, 머지, 아이들)은 **순수 SwiftUI로 끝납니다.**
+> SpriteKit은 프레임마다 움직이고 부딪히는 게임에만 꺼내세요.
+> **GameplayKit**(상태머신·시드 랜덤·경로탐색)은 필요할 때만 — 대개 `enum` 상태머신으로 충분합니다.
+
+### 최소 SpriteKit 게임 — "탭 점프" (SwiftUI 오버레이 포함)
+
+화면을 탭하면 점프, 장애물에 닿으면 게임오버. 점수·게임오버 UI는 SwiftUI가 그립니다.
+
+```swift
+import SpriteKit
+import SwiftUI
+
+// 씬과 SwiftUI가 공유하는 상태 (JS: 게임 루프 밖의 store)
+@Observable
+final class GameState {
+    var score = 0
+    var isGameOver = false
+}
+
+// 충돌 카테고리 — 비트마스크로 "누가 누구와 부딪히는가"를 선언
+struct Mask {
+    static let player:   UInt32 = 1 << 0
+    static let obstacle: UInt32 = 1 << 1
+    static let ground:   UInt32 = 1 << 2
+}
+
+final class GameScene: SKScene, SKPhysicsContactDelegate {
+    let state: GameState
+    private var player = SKSpriteNode(color: .systemBlue, size: CGSize(width: 40, height: 40))
+    private var isOnGround = false
+    private var frames = 0
+
+    init(state: GameState, size: CGSize) {
+        self.state = state
+        super.init(size: size)
+        scaleMode = .aspectFill        // ⭐ 논리 크기 고정 + aspectFill: 기기마다 좌표계가 같아져 밸런스가 안 흔들림
+    }
+    required init?(coder: NSCoder) { fatalError("스토리보드 사용 안 함") }
+
+    // JS: canvas 준비 후 초기화 — 노드 배치와 물리 세팅
+    override func didMove(to view: SKView) {
+        backgroundColor = .black
+        physicsWorld.contactDelegate = self
+        physicsWorld.gravity = CGVector(dx: 0, dy: -18)
+
+        let groundY: CGFloat = 120
+        let ground = SKNode()
+        ground.physicsBody = SKPhysicsBody(edgeFrom: CGPoint(x: 0, y: groundY),
+                                           to: CGPoint(x: size.width, y: groundY))
+        ground.physicsBody?.categoryBitMask = Mask.ground
+        addChild(ground)
+
+        player.position = CGPoint(x: 80, y: groundY + 20)
+        player.physicsBody = SKPhysicsBody(rectangleOf: player.size)
+        player.physicsBody?.allowsRotation = false
+        player.physicsBody?.categoryBitMask = Mask.player
+        player.physicsBody?.contactTestBitMask = Mask.obstacle | Mask.ground   // 이 둘과 닿으면 didBegin 호출
+        player.physicsBody?.collisionBitMask = Mask.ground                     // 물리적으로 막히는 건 바닥만
+        addChild(player)
+
+        // JS: setInterval(spawn, 1200) — 단, 씬이 멈추면 같이 멈춤
+        run(.repeatForever(.sequence([.run { [weak self] in self?.spawnObstacle() },
+                                      .wait(forDuration: 1.2)])))
+    }
+
+    private func spawnObstacle() {
+        let obstacle = SKSpriteNode(color: .systemRed, size: CGSize(width: 30, height: 50))
+        obstacle.position = CGPoint(x: size.width + 20, y: 120 + 25)
+        obstacle.physicsBody = SKPhysicsBody(rectangleOf: obstacle.size)
+        obstacle.physicsBody?.isDynamic = false            // 중력 영향 없음, 위치는 액션으로
+        obstacle.physicsBody?.categoryBitMask = Mask.obstacle
+        addChild(obstacle)
+        obstacle.run(.sequence([.moveBy(x: -(size.width + 60), y: 0, duration: 2.0),
+                                .removeFromParent()]))      // ⭐ 화면 밖 노드는 반드시 제거 (메모리·성능)
+    }
+
+    // JS: canvas.addEventListener('pointerdown', …)
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard isOnGround, !state.isGameOver else { return }
+        isOnGround = false
+        player.physicsBody?.applyImpulse(CGVector(dx: 0, dy: 28))
+    }
+
+    // JS: requestAnimationFrame 콜백 — 매 프레임 호출
+    override func update(_ currentTime: TimeInterval) {
+        guard !state.isGameOver else { return }
+        frames += 1
+        if frames % 30 == 0 { state.score += 1 }          // 살아있는 시간이 점수
+    }
+
+    // 충돌 판정 (JS: matter.js 'collisionStart')
+    func didBegin(_ contact: SKPhysicsContact) {
+        let mask = contact.bodyA.categoryBitMask | contact.bodyB.categoryBitMask
+        if mask & Mask.ground != 0 { isOnGround = true }
+        if mask & Mask.obstacle != 0 {
+            state.isGameOver = true
+            isPaused = true                                 // 씬을 멈추고, 화면은 SwiftUI가 이어받음
+        }
+    }
+}
+
+struct GameView: View {
+    @State private var state = GameState()
+    @State private var scene: GameScene
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let s = GameState()
+        _state = State(initialValue: s)
+        _scene = State(initialValue: GameScene(state: s, size: CGSize(width: 390, height: 844)))
+    }
+
+    var body: some View {
+        SpriteView(scene: scene)
+            .ignoresSafeArea()
+            .overlay(alignment: .top) {                     // HUD는 SwiftUI — 폰트·Dynamic Type 공짜
+                Text("\(state.score)")
+                    .font(.system(.largeTitle, design: .rounded, weight: .black))
+                    .foregroundStyle(.white)
+                    .padding(.top, 8)
+            }
+            .overlay {
+                if state.isGameOver {
+                    GameOverView(score: state.score) { restart() }
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                scene.isPaused = phase != .active           // ⭐ 백그라운드 가면 반드시 멈추기 — 배터리·점수 조작 방지
+            }
+    }
+
+    private func restart() {
+        let s = GameState()
+        state = s
+        scene = GameScene(state: s, size: CGSize(width: 390, height: 844))
+    }
+}
+
+struct GameOverView: View {
+    let score: Int
+    let onRestart: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("게임 오버").font(.title.bold())
+            Text("점수 \(score)").font(.title2)
+            Button("다시 하기", action: onRestart).buttonStyle(.borderedProminent)
+            // 여기가 돈 자리: "광고 보고 이어하기" / "코인으로 이어하기" 버튼 (아래 수익화 절)
+        }
+        .padding(28)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+}
+```
+
+> **씬 크기를 `UIScreen.main.bounds`로 잡지 마세요.** 기기마다 좌표계가 달라져 점프 높이·장애물 속도가
+> 폰마다 다른 게임이 됩니다. 논리 크기(390×844)를 고정하고 `.aspectFill`로 채우면 모든 기기에서
+> 같은 밸런스가 나옵니다. (JS: canvas를 고정 해상도로 그리고 CSS로 늘리는 것과 같은 원리)
+
+### 씬은 플레이만, 메뉴·상점·페이월은 SwiftUI
+
+- **일시정지**: `scenePhase`가 `.active`가 아니면 `scene.isPaused = true`. 메뉴·상점 화면을 띄울 때도 멈추세요(발열·배터리).
+- **효과음**: `run(.playSoundFileNamed("jump.wav", waitForCompletion: false))`. **BGM**은 `AVAudioPlayer`.
+- **오디오 세션**: `try? AVAudioSession.sharedInstance().setCategory(.ambient)` — 사용자가 듣던 음악을 끊지 않고
+  **무음 스위치를 존중**합니다. 이걸 안 하면 "음악 끊긴다" 1점 리뷰의 단골이 됩니다.
+- **햅틱**: 4-0의 `.sensoryFeedback(.impact, trigger: state.score)` 그대로. 점프·충돌에 붙이면 체감이 확 달라집니다.
+- **세로 고정**: Target → General → Deployment Info → Portrait만 체크. iPad도 지원한다면 iPad 항목도 확인.
+- **프레임**: `SKView.preferredFramesPerSecond`는 기본 60. ProMotion 120은 Info.plist `CADisableMinimumFrameDurationOnPhone` = YES가
+  필요하지만 **배터리 때문에 가벼운 게임은 60 권장**.
+- **저장**: 최고점은 `@AppStorage("highScore")`. 재화·진행·스킨은 STEP 4의 SwiftData 또는 JSON 파일.
+  **앱을 강제 종료한 뒤 재화가 남아 있는지** 반드시 테스트 — 사라지면 환불 요청과 1점 리뷰가 옵니다.
+
+### Game Center — 공짜 리텐션과 바이럴
+
+리더보드·업적은 Apple이 UI까지 다 만들어 둔 리텐션 장치입니다. 서버 없이 "친구보다 높은 점수"가 생깁니다.
+
+```swift
+import GameKit
+
+enum GameCenter {
+    // 앱 시작 시 한 번 (JS: OAuth 로그인 콜백)
+    static func authenticate() {
+        GKLocalPlayer.local.authenticateHandler = { viewController, error in
+            if let viewController {
+                // Apple이 주는 로그인 화면 — 루트 뷰컨트롤러에서 present
+                UIApplication.shared.connectedScenes
+                    .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }
+                    .first?.present(viewController, animated: true)
+                return
+            }
+            guard error == nil, GKLocalPlayer.local.isAuthenticated else { return }
+            GKAccessPoint.shared.location = .topLeading
+            GKAccessPoint.shared.isActive = true            // 화면 구석에 Game Center 버튼 — 코드 한 줄
+        }
+    }
+
+    // 게임오버 때 점수 제출
+    static func submit(score: Int) async {
+        guard GKLocalPlayer.local.isAuthenticated else { return }
+        try? await GKLeaderboard.submitScore(score, context: 0, player: GKLocalPlayer.local,
+                                             leaderboardIDs: ["tapjump.highscore"])   // ⭐ ASC에 만든 ID와 글자 하나까지 같아야 함
+    }
+
+    // 업적 (예: 첫 100점)
+    static func unlock(_ id: String) async {
+        let achievement = GKAchievement(identifier: id)
+        achievement.percentComplete = 100
+        achievement.showsCompletionBanner = true
+        try? await GKAchievement.report([achievement])
+    }
+}
+```
+
+**설정 순서:**
+1. Xcode → Signing & Capabilities → **+ Game Center**
+2. App Store Connect → 앱 → **Game Center** → 리더보드 만들기 → ID(예: `tapjump.highscore`)
+3. 코드의 ID와 **정확히** 같은지 확인 — 4-3의 상품 ID와 같은 함정입니다. 다르면 조용히 아무것도 안 됩니다.
+4. 앱 첫 버전 제출 시 리더보드도 함께 제출(체크박스) — 안 하면 라이브 앱에서 리더보드가 비어 있습니다.
+
+### 가벼운 게임으로 돈 버는 구조 ⭐
+
+솔직한 전제부터: **가벼운 게임 하나로는 큰 돈이 안 됩니다.** 다운로드당 매출이 유틸 앱보다 훨씬 낮습니다.
+그래서 구조가 다릅니다.
+
+1. **광고 + IAP 하이브리드**가 기본. 둘 중 하나만으로는 매출이 반쪽입니다.
+2. **여러 개 포트폴리오**. 같은 코드(결제·광고·Game Center·분석)를 재사용해 3~5개를 굴립니다.
+3. **구독은 "매일 새 콘텐츠"가 있을 때만** (데일리 퍼즐, 시즌). 콘텐츠 없이 구독을 팔면 해지율만 높습니다.
+
+| 수익 모델 | 언제 | 구현 위치 |
+|---|---|---|
+| **광고 제거** (비소모성) | 광고가 있는 모든 게임의 기본. **가장 잘 팔리는 상품** | 4-3 `StoreModel` 그대로 (`premium_theme` 자리에 `remove_ads`) |
+| **소모성 재화** (힌트·이어하기·코인) | 퍼즐 힌트, 게임오버 이어하기 | 아래 소모성 처리 코드 |
+| **프리미엄 잠금** (스테이지 팩·스킨) | 콘텐츠가 유한할 때 | 비소모성, 4-3 `currentEntitlements`로 확인 |
+| **보상형 광고** | 이어하기·힌트·2배 보상 — **사용자가 선택**. 캐주얼 매출의 큰 몫 | 광고 SDK (아래) |
+| **전면 광고** | 게임오버 **N회당 1회**, 첫 3판은 절대 금지 | 광고 SDK (아래) |
+| **구독** | 데일리 퍼즐·시즌 콘텐츠, "광고 제거 + VIP" 묶음 | 4-3 구독 흐름 |
+
+**소모성 처리 — 4-3에 없는 부분입니다.** 비소모성·구독과 달리 소모성은 "지급했는가"를 **앱이 직접 기억**해야 합니다.
+
+```swift
+// StoreModel.purchase() 안, .success 분기 (4-3 코드에 이 분기를 추가)
+case .success(let verification):
+    let transaction = try checkVerified(verification)
+    if transaction.productType == .consumable {
+        try await wallet.grant(coins: 100, for: transaction.id)   // ⭐ transaction.id로 멱등 — 같은 id는 두 번 지급 안 함
+    }
+    await transaction.finish()   // ⭐ 지급·저장이 끝난 뒤에 finish. 순서가 반대면 앱이 죽었을 때 돈만 나가고 코인은 없음
+```
+
+```swift
+// 지급 원장 — 처리한 transaction.id 목록을 저장 (JS: 결제 웹훅의 idempotency key)
+@Observable
+final class Wallet {
+    private(set) var coins: Int
+    private var grantedIDs: Set<UInt64>
+
+    func grant(coins amount: Int, for transactionID: UInt64) async throws {
+        guard !grantedIDs.contains(transactionID) else { return }   // 이미 지급함 → 무시
+        coins += amount
+        grantedIDs.insert(transactionID)
+        try persist()                                               // ⭐ 디스크에 쓴 뒤에야 finish 가능
+    }
+    // init/persist: SwiftData 또는 JSON 파일 (STEP 4)
+}
+```
+
+> - 소모성은 `finish()` 후 **`currentEntitlements`에 남지 않습니다.** 원장이 유일한 기록입니다.
+> - `Transaction.updates` 리스너는 **미완료 소모성을 재전달**합니다(앱이 지급 전에 죽은 경우). 앱 시작 시 원장과 대조해 지급하고 `finish()`.
+> - `.storekit` 파일에서 "구매 후 앱 강제 종료" 시나리오를 꼭 돌려보세요.
+
+**광고 SDK — 3줄 요약** (코드는 공식 퀵스타트를 따르세요, SDK 이름이 자주 바뀝니다):
+1. SPM으로 [Google Mobile Ads](https://developers.google.com/admob/ios/quick-start) 또는 AppLovin MAX 추가 → `MobileAds.shared.start()` (SDK 12+ Swift 이름. 이전 버전은 `GAD` 접두사)
+2. 보상형: `load` → 게임오버 화면에서 `present` → **보상 클로저 안에서만** 지급(이어하기·코인)
+3. 전면: 게임오버 카운터를 두고 N회당 1회. 첫 세션 3판은 절대 띄우지 않기
+
+**광고를 넣는 순간 생기는 심사 요건 — 하나라도 어긋나면 4-10의 5.1.2 리젝:**
+- ATT: `ATTrackingManager.requestTrackingAuthorization()`은 **첫 세션 게임오버 뒤**에 (설치 직후 X — 거절률만 올라감)
+- Info.plist `NSUserTrackingUsageDescription` 문구 필수
+- EU 사용자는 UMP(User Messaging Platform) 동의 폼 먼저
+- 광고 SDK는 **프라이버시 매니페스트가 포함된 버전** 사용 (구버전은 업로드 자체가 거부됨)
+- App Privacy 라벨에 "광고 식별자"·"추적" 선언 — 코드와 라벨이 다르면 리젝
+
+### 리텐션 장치 — 돈은 리텐션에서 나옵니다
+
+광고 매출 = DAU × 노출. IAP 매출 = 오래 남은 사람이 삽니다. 둘 다 **다시 오게 만드는 장치**가 매출입니다.
+
+- **데일리 미션·스트릭** + 4-0의 로컬 알림("오늘 미션 남았어요" — 하루 1회, 시간대는 사용자가 마지막 플레이한 시각)
+- **위젯**(4-12)에 오늘의 퍼즐 / 최고점 / 스트릭 — 홈 화면에 남아 있는 게 리텐션
+- **리뷰 요청**: `@Environment(\.requestReview)` → **3번째 클리어 직후**처럼 기분 좋은 순간에. 게임오버 직후는 절대 X. 시스템이 1년 3회로 제한하니 아껴 쓰세요
+- **첫 90초 안에 재미**: 온보딩은 설명 화면이 아니라 **쉬운 첫 판**(튜토리얼 레벨)
+- **추적 지표**: D1/D7/D30 리텐션, 세션 길이, DAU당 광고 노출, IAP 전환율 — App Store Connect 분석 + Firebase 또는 TelemetryDeck
+
+### 현실적인 숫자 (계획용)
+
+| 항목 | 범위 |
+|---|---|
+| DAU 1,000 × ARPDAU $0.03~0.10 (광고+IAP 캐주얼) | 월 $900~3,000 |
+| 한국 생활비 월 300만 원(≈$2,200)에 필요한 DAU | 1,500~3,000 |
+| 그래서 현실적인 형태 | **게임 3~5개 포트폴리오** |
+| 가벼운 게임 1개 제작 | 4~8주 (결제·광고·Game Center 코드는 재사용) |
+
+> ⚠️ 이 범위는 장르·국가(미국 사용자 비중)·광고 시즌(4분기 ↑, 1분기 ↓)에 따라 **몇 배씩** 다릅니다.
+> 첫 게임의 실측(App Store Connect + 광고 대시보드)이 나오는 순간 이 표를 버리고 그 숫자로 계산하세요.
+> 생계 수학 전체(수수료·세금·유틸+게임 포트폴리오)는 [iOS 인디 로드맵](./ios-indie-roadmap.md) PART F·I.
+
+### 게임 출시 체크리스트 (유틸 앱과 다른 점)
+
+- [ ] 세로 고정 + **iPad 지원 여부 결정** (iPhone 전용 선택 가능 — 선택하면 iPad 심사 없음)
+- [ ] Game Center capability + App Store Connect 리더보드 ID가 코드와 일치, 첫 버전과 함께 제출
+- [ ] 광고 SDK 넣었다면 App Privacy 라벨·ATT 문구·프라이버시 매니페스트 3종 세트
+- [ ] 연령 등급 설문(경쟁 요소·도박 요소 항목) 정직하게
+- [ ] 한국: App Store는 **앱마켓 자체등급분류**라 별도 GRAC 신청 불필요 (청소년이용불가 등급 제외)
+- [ ] **확률형 아이템**(랜덤 상자·가챠)이 있으면 한국 게임산업법 확률 표시 의무 — 가벼운 게임은 **안 넣는 게 편합니다**
+- [ ] 오디오 세션 `.ambient` — 사용자 음악 안 끊기, 무음 스위치 존중
+- [ ] 메뉴·상점 화면에서 씬 일시정지 (발열 테스트: 10분 플레이 후 기기 온도)
+- [ ] 앱 강제 종료 → 재실행 후 재화·진행 유지
+- [ ] 심사용: **첫 실행에 바로 플레이 가능** (로그인 벽·Game Center 강제 X — 4-10의 5.1.1 리젝)
+
+> 이 범위를 넘어가면(3D, Android 동시 출시, 큰 콘텐츠) [Unity 트랙](./react-to-unity.md)으로.
+> 사업 전체 그림 — 구독 설계·세금·ASO·포트폴리오 — 은 [iOS 인디 로드맵](./ios-indie-roadmap.md)에서 이어집니다.
 
 ---
 

@@ -9,7 +9,8 @@
 | 트랙 | 문서 | 기술 스택 | 이런 사람에게 |
 |------|------|----------|--------------|
 | 🤖 **Android** | [android-kotlin-compose.md](./android-kotlin-compose.md) | Kotlin + Jetpack Compose | Mac 없이 시작 가능. 출시 비용 저렴($25 1회), 심사 빠름 |
-| 🍎 **iOS** | [ios-swift-swiftui.md](./ios-swift-swiftui.md) | Swift + SwiftUI | **Mac 필수**. 수익성·UX 완성도 높고 고유 기능(Live Activity 등)이 강력 |
+| 🍎 **iOS** | [ios-swift-swiftui.md](./ios-swift-swiftui.md) | Swift + SwiftUI | **Mac 필수**. 수익성·UX 완성도 높고 고유 기능(Live Activity 등)이 강력. 가벼운 2D 게임(SpriteKit)까지 네이티브로 |
+| 💰 **iOS 인디 로드맵** | [ios-indie-roadmap.md](./ios-indie-roadmap.md) | 구독 설계·StoreKit 2 생명주기·ASO·세금·생계 수학·가벼운 게임 | iOS 기초 이후, 유틸 앱 + 가벼운 게임의 IAP/구독으로 먹고사는 게 목표 |
 | 🎮 **Unity** | [react-to-unity.md](./react-to-unity.md) | C# + Unity 6 (UI Toolkit / UGUI) | 게임·인터랙티브 콘텐츠·AR/VR이 목표 |
 | 🎯 **Unity 심화** | [unity-indie-roadmap.md](./unity-indie-roadmap.md) | 렌더링·쉐이더·아키텍처 + 디자인·수익화·마케팅 | Unity 기초 이후, 인디 게임으로 수익을 내는 게 목표 |
 | 📘 **Unity 교과서** | [unity-textbook/](./unity-textbook/00_README.md) | 40장(본편 30 + 보강 10) — 게임 하나(코인 러시)를 키우며 배우는 심화 교과서 | 로드맵을 실제로 공부할 때 (연습 문제·셀프 체크 포함) |
@@ -22,8 +23,11 @@
 ```
 만들려는 게 무엇인가요?
 
-게임 / 3D / AR·VR / 물리·애니메이션 중심 콘텐츠
-  → 🎮 Unity 트랙 (고민할 것 없이 이것)
+게임
+  ├─ 3D / AR·VR / 복잡한 물리 / Android 동시 출시 / 큰 콘텐츠
+  │    → 🎮 Unity 트랙
+  └─ 2D 캐주얼·퍼즐·아케이드를 iOS에서 가볍게, 유틸 앱과 한 사업으로
+       → 🍎 iOS 트랙 4-14 (SpriteKit) + iOS 인디 로드맵
 
 폼·리스트·네비게이션 중심의 "일반 앱"
   ├─ Mac이 없다 / 안드로이드를 쓴다 / 빨리 스토어에 올려보고 싶다

@@ -54,10 +54,10 @@
 | 층 | 무엇 | 어디서 배우나 | 이 문서에서 |
 |---|---|---|---|
 | 1. 기초 | Swift·SwiftUI·SwiftData·네트워크·권한·출시 | [iOS 트랙](./ios-swift-swiftui.md) PART 0~4 | PART A (링크 지도) |
-| 2. 출시 품질 | 마이그레이션·동기화·크래시·CI·위젯·알림 | 트랙에 얇게 있음 | PART B |
-| 3. 상품 | 니치 선정·수요 검증·일회성 vs 구독 | 없음 | PART C |
-| 4. 결제 | StoreKit 2 생명주기·오퍼·서버·RevenueCat | 트랙 4-3에 기본만 | PART D |
-| 5. 전환 | 페이월·온보딩·가격·A/B | 없음 | PART E |
+| 2. 출시 품질 | 마이그레이션·동기화·크래시·CI·위젯·알림 | 트랙 STEP 5 ⑦⑧, 4-15, 4-16 | PART B |
+| 3. 상품 | 니치 선정·수요 검증·일회성 vs 구독 | 트랙 STEP 5 ①(카탈로그) | PART C |
+| 4. 결제 | StoreKit 2 생명주기·오퍼·서버·RevenueCat | 트랙 STEP 5 ②④⑥⑩ (코드 정본) | PART D |
+| 5. 전환 | 페이월·온보딩·가격·A/B | 트랙 STEP 5 ③④⑤⑨ | PART E |
 | 6. 발견 | ASO·Apple Ads·리뷰·리텐션·지표 | 없음 | PART F |
 | 7. 돈 | 수수료·세금·정산·사업자 | 없음 | PART G |
 | 8. 게임 | SpriteKit·Game Center·광고+IAP | 트랙 4-14 | PART H |
@@ -78,23 +78,24 @@
 - **어디까지**: `let`/`var`, Optional, struct/class/enum, async/await, `[weak self]`를 남의 코드에서 읽고 설명할 수 있으면 충분. 제네릭·프로토콜 심화는 필요할 때.
 - **JS 개발자 함정 3개**만 외우세요: `let`은 `const`, 구조체는 값 복사, `@State`는 뷰의 소유물.
 
-## A-2. 샘플 앱 4종 완주 ⭐필수 (2~3주)
+## A-2. 샘플 앱 완주 — STEP 1~4 + STEP 5 메모 Pro ⭐필수 (3~4주)
 
 - [STEP 1 카운터](./ios-swift-swiftui.md#step-1-hello-world--첫-화면과-preview) → [STEP 1.5 상태 관리](./ios-swift-swiftui.md#step-15-상태-관리-제대로--react-개발자가-가장-자주-다치는-곳) → [STEP 2 할 일](./ios-swift-swiftui.md#step-2-할-일-목록--list-입력-crud) → [STEP 3 날씨](./ios-swift-swiftui.md#step-3-날씨-앱--api-통신-viewmodel-네비게이션) → [STEP 4 메모](./ios-swift-swiftui.md#step-4-메모-앱-완성형--swiftdata-이미지-테마)
-- **어디까지**: 메모 앱을 **자기 폰에 설치해서 일주일 실제로 쓰기**. 시뮬레이터에서만 돌린 앱은 끝까지 안 만들게 됩니다.
-- STEP 3의 ViewModel은 프로토콜 주입(`WeatherFetching`)으로 되어 있습니다. 이 패턴이 나중에 StoreKit 테스트에도 그대로 쓰입니다.
+- 그다음 **[STEP 5 메모 Pro](./ios-swift-swiftui.md#step-5-메모-pro--구독페이월위젯으로-수익화--ios-전용-단계)** — 카탈로그·권한 엔진·페이월·온보딩·설정·스키마 버전·위젯·리뷰 요청을 하나의 앱으로. 이 문서 PART D·E의 코드 정본이라 **건너뛰면 아래 PART가 공중에 뜹니다.**
+- **어디까지**: 메모 Pro를 **자기 폰에 설치해서 일주일 실제로 쓰기** + STEP 5 ⑩ 시나리오 11개 통과. 시뮬레이터에서만 돌린 앱은 끝까지 안 만들게 됩니다.
+- STEP 3의 ViewModel은 프로토콜 주입(`WeatherFetching`)으로 되어 있습니다. 이 패턴이 StoreKit 테스트에도 그대로 쓰입니다.
 
 ## A-3. 실전 보강 — 출시에 필요한 것만 먼저 ⭐필수 (2주)
 
 순서대로: [4-2 권한](./ios-swift-swiftui.md#4-2-권한-처리) → [4-3 인앱 결제](./ios-swift-swiftui.md#4-3-인앱-결제와-구독-수익화) → [4-4 서명](./ios-swift-swiftui.md#4-4-코드-서명--아카이브) → [4-5 TestFlight](./ios-swift-swiftui.md#4-5-testflight-베타-배포-) → [4-8 접근성·다국어](./ios-swift-swiftui.md#4-8-접근성--다국어--신규) → [4-10 App Store 출시](./ios-swift-swiftui.md#4-10-app-store-출시-절차--신규) → [4-13 지뢰](./ios-swift-swiftui.md#4-13-흔한-지뢰-모음--신규)
 
 - 4-0(SwiftUI API 보강)·4-7(테스트)·4-9(성능)은 **첫 앱 출시 뒤에** 봐도 됩니다. 출시가 먼저입니다.
-- 4-3은 "결제 버튼이 동작하는 수준"입니다. 구독으로 먹고살려면 PART D가 필요합니다.
+- 4-3은 StoreKit 2 기본 흐름이고 실전 구성은 STEP 5에 있습니다. 출시 뒤 첫 업데이트 전에 [4-15 운영 장비](./ios-swift-swiftui.md#4-15-운영-장비--크래시-리포팅xcode-cloud매년-9월-os-대응)(크래시·Xcode Cloud·OS 대응)를, 로그인이 필요해지면 [4-16](./ios-swift-swiftui.md#4-16-로그인백엔드네트워크-복원력-필요할-때만)을 봅니다.
 
 ## A-4. 기초 졸업 체크리스트
 
 - [ ] 메모 앱을 TestFlight로 **다른 사람 폰**에 설치시켜 봤다
-- [ ] `.storekit` 파일로 구매·복원을 시뮬레이터에서 돌려봤다
+- [ ] STEP 5 ⑩의 `.storekit` 시나리오 11개(체험→갱신→해지→만료→유예→환불→재설치→오프라인)를 전부 통과했다
 - [ ] 개인정보 라벨·Privacy Manifest·심사 리젝 표(4-10)를 읽고 무슨 뜻인지 안다
 - [ ] Apple Developer Program($99/년)에 가입했다 — **가입 전에는 아래 PART를 시작하지 마세요.** 등록 심사·D-U-N-S에 며칠 걸리고, 그 사이에 열정이 식습니다
 
@@ -148,9 +149,14 @@ enum MemoMigrationPlan: SchemaMigrationPlan {
 
 typealias Memo = MemoSchemaV2.Memo      // 앱 코드는 항상 "현재 버전"만 봄
 
-// App
-.modelContainer(for: Memo.self, migrationPlan: MemoMigrationPlan.self)
+// App — 마이그레이션 플랜은 컨테이너를 직접 만들 때 넘긴다 (.modelContainer(for:)에는 그 인자가 없음)
+let schema = Schema(versionedSchema: MemoSchemaV2.self)
+let container = try! ModelContainer(for: schema, migrationPlan: MemoMigrationPlan.self,
+                                    configurations: [ModelConfiguration(schema: schema)])
+// WindowGroup { ... }.modelContainer(container)
 ```
+
+전체 앱 코드(이미지 필드 포함)와 덮어쓰기 설치 테스트는 [STEP 5 ⑦](./ios-swift-swiftui.md#step-5-메모-pro--구독페이월위젯으로-수익화--ios-전용-단계).
 
 **어디까지**: 업데이트마다 **이전 버전 앱으로 만든 데이터 파일을 새 버전에서 여는 테스트**를 합니다.
 TestFlight 이전 빌드 → 데이터 입력 → 새 빌드 설치(삭제하지 말고 덮어쓰기) → 데이터가 살아 있는가.
@@ -165,6 +171,8 @@ TestFlight 이전 빌드 → 데이터 입력 → 새 빌드 설치(삭제하지
 | **Firebase Crashlytics** | 무료 | 앱이 2개 이상이거나 실시간 알림이 필요할 때. Firebase Analytics도 같이 붙음 |
 | **Sentry** | 무료 티어 | 서버가 있거나 웹 경험이 있으면 익숙함 |
 
+**코드·설정 절차**: [트랙 4-15](./ios-swift-swiftui.md#4-15-운영-장비--크래시-리포팅xcode-cloud매년-9월-os-대응) (MetricKit 구독 코드, Crashlytics 3단계, dSYM).
+
 **무엇을**: 4-1의 `Logger`를 **모든 결제·저장 경로**에 넣으세요. 크래시보다 "결제했는데 잠금이 안 풀림"이 더 자주 생기고, 이건 로그가 없으면 재현이 안 됩니다.
 dSYM 업로드를 빌드 스크립트에 넣지 않으면 크래시 리포트가 주소 숫자로만 옵니다(심볼리케이션).
 
@@ -174,7 +182,7 @@ dSYM 업로드를 빌드 스크립트에 넣지 않으면 크래시 리포트가
 
 - **Xcode Cloud**: Apple 공식, 월 25시간 무료. 설정이 Xcode 안에 있어 가장 쉽습니다. 혼자면 이걸로 충분.
 - **GitHub Actions + fastlane**: 서명 관리(`match`)가 필요하고 macOS 러너가 비쌉니다. 팀이 생기면.
-- **어디까지**: `main`에 푸시하면 테스트가 돌고, 태그를 붙이면 TestFlight에 올라가는 것. 그 이상은 지금 필요 없습니다.
+- **어디까지**: `main`에 푸시하면 테스트가 돌고, 태그를 붙이면 TestFlight에 올라가는 것. 그 이상은 지금 필요 없습니다. 워크플로 설정 순서와 `ci_post_clone.sh`는 [트랙 4-15](./ios-swift-swiftui.md#4-15-운영-장비--크래시-리포팅xcode-cloud매년-9월-os-대응).
 
 ## B-4. 동기화 — CloudKit은 "켜면 되는 것"이 아님 ⭐중요
 
@@ -191,7 +199,7 @@ dSYM 업로드를 빌드 스크립트에 넣지 않으면 크래시 리포트가
 
 **왜**: 트랙 4-12가 "네이티브를 쓰는 진짜 이유"라고 한 기능들입니다. 유틸 앱의 **리텐션과 업셀** 둘 다 여기서 나옵니다.
 
-**무엇을**: 위젯 최소 구성 — File → New → Target → Widget Extension 뒤에 필요한 것 세 가지.
+**무엇을**: 위젯 최소 구성 — File → New → Target → Widget Extension 뒤에 필요한 것 세 가지. 완성 코드(Provider·뷰·잠금 업셀·딥링크)는 [STEP 5 ⑧](./ios-swift-swiftui.md#step-5-메모-pro--구독페이월위젯으로-수익화--ios-전용-단계).
 ```swift
 // 1) App Group — 앱과 위젯이 데이터를 공유하는 유일한 통로 (JS: 같은 origin의 localStorage 공유)
 //    Signing & Capabilities → App Groups → "group.com.you.memo" (앱·위젯 타깃 둘 다)
@@ -217,11 +225,13 @@ WidgetCenter.shared.reloadTimelines(ofKind: "TodayWidget")
 - **로컬 알림**(4-0)은 리텐션의 가장 싼 장치. 단 **권한 요청은 가치가 보인 뒤**(첫 할 일을 완료한 직후 등). 첫 실행에 띄우면 거절률이 높고 되돌릴 수 없습니다.
 - **딥링크**: `onOpenURL` + URL 스킴(`memo://paywall`)이면 위젯·알림·마케팅 링크에서 페이월로 바로 갑니다. Universal Links는 웹사이트가 있을 때.
 - **계정 삭제 5.1.1(v)**: 로그인(Sign in with Apple 포함)이 있으면 **앱 안에서 계정 삭제** 기능이 필수. 로그인이 없는 앱이면 해당 없음 — 그래서 첫 앱은 **로그인 없이** 만드는 게 심사도 개발도 쉽습니다.
-- **Sign in with Apple**: 서드파티 로그인을 넣는 순간 필수(4.8). 로그인이 필요 없으면 넣지 마세요.
+- **Sign in with Apple**: 서드파티 로그인을 넣는 순간 필수(4.8). 로그인이 필요 없으면 넣지 마세요. 코드·계정 삭제·백엔드 선택표·Keychain·네트워크 재시도는 [트랙 4-16](./ios-swift-swiftui.md#4-16-로그인백엔드네트워크-복원력-필요할-때만).
 
 ## B-7. 매년 9월 — OS 업데이트 대응 루틴 ⭐필수
 
 **왜**: 새 iOS가 나오면 툴바·탭바·시트 외형이 바뀌고(iOS 26의 Liquid Glass처럼), deprecated API가 늘고, 심사 기준이 바뀝니다. 유료 앱은 "새 OS에서 깨져 보임"이 곧 환불입니다.
+
+Liquid Glass 대응 방법(`UIDesignRequiresCompatibility`, `.glassEffect()`)과 확인 포인트는 [트랙 4-15](./ios-swift-swiftui.md#4-15-운영-장비--크래시-리포팅xcode-cloud매년-9월-os-대응).
 
 **루틴** (6월 WWDC ~ 9월 출시):
 1. 6월: 베타 Xcode로 빌드 → 경고·deprecated 목록 정리. 새 디자인 시스템이 자동 적용되는지 확인
@@ -296,7 +306,7 @@ WidgetCenter.shared.reloadTimelines(ofKind: "TodayWidget")
 # PART D: StoreKit 2 심화 — 구독 생명주기를 끝까지
 
 > 트랙 [4-3](./ios-swift-swiftui.md#4-3-인앱-결제와-구독-수익화)의 `StoreModel`(상품 조회·구매·복원·`Transaction.updates`)이 정본입니다.
-> 여기서는 **그 코드에 붙여야 실제 운영이 되는 것**만 다룹니다. 구독 앱 매출이 새는 곳이 전부 이 PART입니다.
+> 이 PART의 내용을 **하나의 앱으로 합친 코드가 [STEP 5](./ios-swift-swiftui.md#step-5-메모-pro--구독페이월위젯으로-수익화--ios-전용-단계)** 입니다(`ProStore`·`AccessCache`·`PaywallView`·`SettingsView`). 여기서는 왜 그렇게 짰는지와 STEP 5에 없는 오퍼·서버 쪽을 다룹니다. 구독 앱 매출이 새는 곳이 전부 이 PART입니다.
 
 ## D-1. 구독 상태 해석 — `renewalInfo`를 읽어야 이탈을 막는다 ⭐필수
 
@@ -426,7 +436,7 @@ struct CachedAccess: Codable { let isPro: Bool; let checkedAt: Date; let expires
 
 ## E-2. 페이월 화면 — `SubscriptionStoreView`부터 ⭐필수
 
-트랙 4-3의 `PaywallView`는 버튼 나열입니다. Apple이 제공하는 페이월로 시작하세요(심사 문구 요건이 자동으로 충족됨):
+Apple이 제공하는 페이월로 시작하세요(심사 문구 요건이 자동으로 충족됨). 진입점별 문구·평생 옵션·분석 이벤트까지 붙은 완성본은 STEP 5 ④:
 
 ```swift
 // iOS 17+. 구독 그룹 ID(ASC에서 확인)만 넘기면 상품·가격·체험·약관 링크까지 그려줌

@@ -74,7 +74,9 @@ xcode-select -p            # 설치 경로 확인
 
 > **버전 숫자에 대하여**: Apple은 2025년부터 OS/도구 버전을 **연도 기반**으로 통일했습니다
 > (iOS 26, Xcode 26 식). 이 문서는 특정 숫자에 의존하지 않게 썼습니다.
-> 규칙만 기억하세요 — **Xcode는 최신 정식 버전, 배포 타깃(Deployment Target)은 최신-2 정도.**
+> 규칙만 기억하세요 — **Xcode는 최신 정식 버전. 배포 타깃(최소 지원 iOS)은 최신 메이저에서 두 단계 아래**
+> (2026년 9월 기준 iOS 17 — `@Observable`·SwiftData의 최소선). 그보다 낮추면 이 문서의 코드가 안 돌고,
+> 높이면 사용자 분포(App Store Connect → 분석)에서 수 %를 잃습니다.
 > 기능 하나가 최신 OS 전용이면 `if #available(iOS 26, *)`로 분기합니다.
 
 ## 0-3. 시뮬레이터
@@ -749,17 +751,32 @@ final class WeatherViewModel {
 
 ### Swift 6 동시성 (Strict Concurrency) — 미리 알아둘 것
 
-Swift 6 언어 모드를 켜면 컴파일러가 데이터 경쟁을 전부 검사합니다.
-`Sendable` 관련 경고/에러가 쏟아질 수 있는데, 학습 단계라면:
+Xcode 26으로 만든 새 프로젝트는 **Swift 6 언어 모드 + "Approachable Concurrency"(기본 MainActor 격리)** 가
+기본입니다. 컴파일러가 데이터 경쟁을 검사하되, 따로 표시하지 않은 코드는 전부 메인 액터로 간주해서
+"쏟아지는 Sendable 에러"가 예전보다 훨씬 적습니다. 예전 자료의 **"Swift 5 모드로 내려라"는 조언은
+이제 새 프로젝트 기본값과 어긋납니다.** 규칙 4개만 알면 됩니다.
 
-```
-Build Settings → Swift Compiler - Language → Swift Language Version
-→ 학습 중에는 Swift 5 모드 유지 + 경고만 켜두기
-→ 익숙해지면 Swift 6 모드로 전환
+```swift
+// ① UI·ViewModel은 그대로 두면 MainActor — 아무것도 안 붙여도 됩니다 (JS: 싱글 스레드 이벤트 루프와 같은 감각)
+@Observable final class TodoViewModel { var items: [Todo] = [] }   // 암묵적으로 @MainActor
+
+// ② 무거운 계산·파일 IO만 "백그라운드로 보내겠다"를 명시 — nonisolated (또는 Swift 6.2의 @concurrent)
+nonisolated func parse(_ data: Data) throws -> [Item] {           // 메인 액터 밖에서 실행
+    try JSONDecoder().decode([Item].self, from: data)
+}
+// 호출: let items = try await parse(data)   ← await 한 번으로 스레드를 건너갔다 돌아옵니다
+
+// ③ 스레드를 건너는 값은 Sendable — struct/enum은 자동, class는 @MainActor 이거나 아래처럼 불변이어야 함
+struct Item: Sendable { let id: Int; let name: String }            // 자동 Sendable
+final class Config: Sendable { let apiKey: String; init(apiKey: String) { self.apiKey = apiKey } }  // let 만
+
+// ④ 에러가 쏟아지는 "기존 프로젝트"만: Build Settings → Swift Language Version = 5
+//    + Strict Concurrency Checking = Complete (경고로만) → 파일 단위로 고치며 6으로 전환
 ```
 
-> 이게 뭔지 몰라도 앱은 만들 수 있습니다. 다만 **"Sendable"이라는 단어가 나오면
-> 이 얘기구나** 정도만 알아두세요.
+> 이게 뭔지 몰라도 STEP 4까지는 만들 수 있습니다. 다만 **"actor-isolated"**, **"Sendable"** 이라는
+> 단어가 든 에러가 나오면 이 절로 돌아오세요. 실제 예는 STEP 3의 `WeatherViewModel`
+> (`@MainActor` + `any WeatherFetching: Sendable`)입니다.
 
 ## 1-10. 메모리 관리 (ARC)와 [weak self] ⭐
 
@@ -2094,6 +2111,641 @@ WindowGroup {
 
 ---
 
+## STEP 5: 메모 Pro — 구독·페이월·위젯으로 수익화 ⭐ (iOS 전용 단계)
+
+> STEP 4의 메모 앱을 **실제로 파는 앱**으로 바꿉니다. 이 단계가 끝나면 "결제 버튼이 눌린다"가 아니라
+> **체험 → 결제 → 갱신 실패 → 유예 → 만료 → 환불 → 재설치 복원**까지 전부 시뮬레이터에서 돌려본 앱이 생깁니다.
+> 다른 트랙에는 없는 iOS 전용 단계이고, [iOS 인디 로드맵](./ios-indie-roadmap.md) PART C~E의 코드 정본입니다.
+>
+> **만드는 것**: 무료 20개 제한 → Pro(무제한·테마·위젯 전부) / 연간·월간·평생 카탈로그 / 온보딩 → 소프트 페이월 /
+> 구독 상태 해석(유예·청구 재시도) / 오프라인 권한 캐시 / 스키마 버전 관리 / 위젯 + 업셀 / 설정 화면(복원·관리·환불) / 리뷰 요청
+
+**파일 구조 (STEP 4에 추가되는 것)**
+```
+MemoApp/
+├── Models/
+│   ├── Schema.swift            ← ⑦ 버전 있는 Memo (STEP 4의 Memo.swift를 대체)
+│   └── ProStore.swift          ← ② 권한 엔진
+├── Views/
+│   ├── OnboardingView.swift    ← ⑤
+│   ├── PaywallView.swift       ← ④
+│   ├── SettingsView.swift      ← ⑥
+│   └── MemoListView.swift      ← ③ 무료 한도 게이트 (STEP 4 수정)
+├── Shared/
+│   └── SharedState.swift       ← ⑧ 앱 ↔ 위젯 공유 (App Group)
+└── TodayMemoWidget/            ← ⑧ 위젯 익스텐션 타깃
+    └── TodayMemoWidget.swift
+```
+
+### ① 상품과 App Store Connect — 코드보다 먼저
+
+| 상품 ID | 종류 | 한국 가격 | 역할 |
+|---|---|---|---|
+| `pro_yearly` | 자동 갱신 구독 (그룹 "Pro") | ₩39,000/년 · **7일 무료 체험** | 기본 선택. 월 환산 ₩3,250 |
+| `pro_monthly` | 자동 갱신 구독 (같은 그룹, 같은 등급) | ₩5,900/월 | 앵커 — "연간이 45% 저렴" |
+| `pro_lifetime` | 비소모성 | ₩79,000 | 구독 거부층 흡수 |
+
+App Store Connect에서 순서대로 (한 번만):
+1. 앱 → 구독 → **구독 그룹 "Pro"** 생성 → 그룹 ID(숫자)를 메모 — 코드의 `groupID`
+2. 그룹 안에 `pro_yearly`·`pro_monthly` 생성, **같은 등급(1)**. 연간에 **소개 오퍼: 무료 체험 7일**
+3. 앱 → 인앱 구매 → `pro_lifetime` (비소모성)
+4. 구독 → **청구 유예 기간 켜기**(기본 꺼짐 — 결제 실패 이탈을 자동 회수), 가족 공유 켜기(선택)
+5. 계약·세금·금융 → **Small Business Program 신청**(수수료 30% → 15%) + 세금 양식 + 은행
+6. 🚨 상품 3개를 **앱 첫 버전과 함께 제출**. 앱만 제출하면 결제가 안 되는 앱이 라이브됩니다
+
+로컬 테스트용 `.storekit` 파일(4-3)에도 같은 ID·가격·체험·그룹을 만들어 두세요. 코드는 이 파일로 먼저 돌립니다.
+
+### ② `ProStore` — 권한 엔진 (4-3 `StoreModel`의 실전판)
+
+React의 결제 store 하나가 "지금 이 사용자가 Pro인가"를 결정합니다. 4-3과 다른 점은 세 가지 —
+**구독 상태를 해석**하고(유예·청구 재시도), **마지막 결과를 Keychain에 캐시**하고(오프라인·첫 프레임), **해지 예약을 감지**합니다.
+
+```swift
+// Models/ProStore.swift
+import SwiftUI
+import Observation
+import StoreKit
+
+@MainActor @Observable
+final class ProStore {
+    // 접근 등급. JS: Stripe subscription.status(active/past_due/canceled)를 앱 관점으로 정리한 것
+    enum Access: String, Codable, Equatable {
+        case none           // 무료
+        case active         // 구독 중 (체험 포함)
+        case gracePeriod    // 결제 실패, Apple이 재시도 중 — 접근 유지 + 배너
+        case billingRetry   // 유예도 지남 — 접근 차단 + 복구 안내
+        case lifetime       // 평생 구매
+    }
+
+    static let groupID = "21345678"                  // ⭐ ASC 구독 그룹 ID로 교체
+    static let subscriptionIDs = ["pro_yearly", "pro_monthly"]
+    static let lifetimeID = "pro_lifetime"
+
+    private(set) var products: [Product] = []
+    private(set) var access: Access = .none
+    private(set) var willAutoRenew = true            // false = 해지 예약 → 설문 기회
+    private(set) var lastError: String?
+    private var updates: Task<Void, Never>?
+
+    var isPro: Bool { access == .active || access == .gracePeriod || access == .lifetime }
+
+    init() {
+        access = AccessCache.load() ?? .none         // ⭐ 첫 프레임·오프라인: 마지막 확인 결과로 시작 (지하철에서 Pro가 풀리지 않게)
+        updates = Task { [weak self] in              // ⭐ 구매 전에 등록 — 앱 밖에서 끝난 거래(Ask to Buy·환불·갱신)를 받음
+            for await update in Transaction.updates {
+                if let transaction = try? update.payloadValue {   // 검증 실패면 nil → 지급 안 함
+                    await transaction.finish()
+                    await self?.refresh()
+                }
+            }
+        }
+        Task { await loadProducts(); await refresh() }
+    }
+
+    deinit { updates?.cancel() }
+
+    func loadProducts() async {
+        do {
+            let ids = Self.subscriptionIDs + [Self.lifetimeID]
+            products = try await Product.products(for: ids).sorted { $0.price > $1.price }   // 연간·평생이 위로
+            lastError = nil
+        } catch {
+            lastError = "상품을 불러오지 못했습니다"                 // 페이월에 재시도 버튼
+        }
+    }
+
+    /// 진실의 원천 — 앱 시작, 포그라운드 복귀, 구매·복원 후, 거래 업데이트 후에 호출
+    func refresh() async {
+        var next: Access = .none
+
+        // 1) 현재 유효한 거래 (환불·취소된 건 제외됨)
+        for await result in Transaction.currentEntitlements {
+            guard case .verified(let transaction) = result, transaction.revocationDate == nil else { continue }
+            if transaction.productID == Self.lifetimeID { next = .lifetime; break }
+            if Self.subscriptionIDs.contains(transaction.productID) { next = .active }
+        }
+
+        // 2) 구독은 상태를 더 자세히 — 유예·청구 재시도는 currentEntitlements만으로는 구분이 안 됨
+        if next != .lifetime, let product = products.first(where: { Self.subscriptionIDs.contains($0.id) }),
+           let statuses = try? await product.subscription?.status {
+            for status in statuses {
+                switch status.state {
+                case .subscribed:            next = .active
+                case .inGracePeriod:         next = .gracePeriod
+                case .inBillingRetryPeriod:  next = .billingRetry
+                default: break               // .expired / .revoked → 그대로 (.none)
+                }
+                if case .verified(let info) = status.renewalInfo {
+                    willAutoRenew = info.willAutoRenew          // 해지 예약 감지 (⑥ 설문)
+                    // info.expirationReason, info.autoRenewPreference(다운그레이드 예약)도 여기서 읽음
+                }
+            }
+        }
+
+        access = next
+        AccessCache.save(next)
+        SharedState.write(isPro: isPro)                         // ⑧ 위젯에 알림
+    }
+
+    func purchase(_ product: Product) async throws -> Bool {
+        switch try await product.purchase() {
+        case .success(let verification):
+            let transaction = try verification.payloadValue    // 검증 실패면 throw → 지급 안 함
+            await transaction.finish()                          // 구독·비소모성은 finish 순서가 자유. 소모성은 4-14 참고
+            await refresh()
+            return true
+        case .pending:      return false                        // Ask to Buy — 승인되면 Transaction.updates로 옴
+        case .userCancelled: return false
+        @unknown default:   return false
+        }
+    }
+
+    func restore() async {
+        try? await AppStore.sync()                              // 사용자 동작(복원 버튼)에서만
+        await refresh()
+    }
+
+    /// 페이월 문구용 — "7일 무료" vs "₩39,000/년"
+    func isTrialEligible(_ product: Product) async -> Bool {
+        guard product.subscription?.introductoryOffer != nil else { return false }
+        return await product.subscription?.isEligibleForIntroOffer ?? false
+    }
+}
+
+// 오프라인·첫 프레임용 캐시. Keychain 래퍼는 4-16. UserDefaults는 백업으로 새 기기에 따라가서 부적합
+enum AccessCache {
+    private struct Entry: Codable { let access: ProStore.Access; let checkedAt: Date }
+    private static let key = "pro.access.v1"
+    private static let maxAge: TimeInterval = 7 * 24 * 3600      // ⭐ 7일 넘게 재확인 못 하면 무료로 — 오프라인 무한 사용 방지
+
+    static func save(_ access: ProStore.Access) {
+        if let data = try? JSONEncoder().encode(Entry(access: access, checkedAt: .now)) {
+            try? Keychain.set(data, for: key)
+        }
+    }
+    static func load() -> ProStore.Access? {
+        guard let data = Keychain.get(key),
+              let entry = try? JSONDecoder().decode(Entry.self, from: data),
+              Date.now.timeIntervalSince(entry.checkedAt) < maxAge else { return nil }
+        return entry.access
+    }
+}
+```
+
+```swift
+// 앱 진입점 — 주입 + 포그라운드 복귀마다 재확인
+@main
+struct MemoApp: App {
+    @State private var store = ProStore()
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("onboardingDone") private var onboardingDone = false
+
+    var body: some Scene {
+        WindowGroup {
+            Group {
+                if onboardingDone { MemoListView() } else { OnboardingView() }
+            }
+            .environment(store)
+            .onOpenURL { url in DeepLink.handle(url) }            // ⑧ 위젯 → 페이월
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await store.refresh() } }
+            }
+        }
+        .modelContainer(container)                               // ⑦ 마이그레이션 플랜은 컨테이너를 직접 만들 때만 넘길 수 있음
+    }
+
+    private let container: ModelContainer = {
+        let schema = Schema(versionedSchema: MemoSchemaV2.self)
+        return try! ModelContainer(for: schema, migrationPlan: MemoMigrationPlan.self,
+                                   configurations: [ModelConfiguration(schema: schema)])
+    }()
+}
+```
+
+> ⚠️ **`isPro`가 `gracePeriod`를 포함하는 이유**: 결제 수단 문제로 갱신이 실패해도 Apple이 최대 16일(설정에 따라) 재시도합니다.
+> 이 기간에 접근을 막으면 "돈 냈는데 왜 잠겨요" 리뷰가 달리고, 열어두면 대부분 자동 복구됩니다. 배너 하나면 충분합니다.
+
+### ③ 무료 한도 게이트 — 잠긴 기능을 탭한 순간이 가장 전환이 높다
+
+STEP 4의 `MemoListView` 툴바 버튼을 바꿉니다. 무료는 20개, Pro는 무제한.
+
+```swift
+// Views/MemoListView.swift (STEP 4에서 바뀌는 부분만)
+struct MemoListView: View {
+    @Query(sort: \Memo.createdAt, order: .reverse) private var memos: [Memo]
+    @Environment(\.modelContext) private var context
+    @Environment(ProStore.self) private var store
+    @Environment(\.requestReview) private var requestReview
+    @AppStorage("memoSavedCount") private var savedCount = 0
+    @State private var showPaywall = false
+    @State private var paywallSource = ""                       // 어디서 열렸는지가 곧 분석 이벤트
+    static let freeLimit = 20
+
+    var body: some View {
+        NavigationStack {
+            List { /* STEP 4와 동일 */ }
+            .navigationTitle("메모")
+            .navigationDestination(for: Memo.self) { MemoDetailView(memo: $0) }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink { SettingsView() } label: { Label("설정", systemImage: "gearshape") }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("추가", systemImage: "plus") { addMemo() }
+                }
+            }
+            .safeAreaInset(edge: .top) {                            // ② 유예 기간 배너
+                if store.access == .gracePeriod {
+                    Text("결제 수단을 확인해 주세요 — Pro가 곧 중단됩니다")
+                        .font(.footnote).padding(8).frame(maxWidth: .infinity)
+                        .background(.yellow.opacity(0.25))
+                }
+            }
+            .sheet(isPresented: $showPaywall) { PaywallView(source: paywallSource) }
+            .onAppear {                                             // ⑧ 위젯 딥링크로 열렸으면 페이월
+                if let source = DeepLink.pendingPaywallSource { paywallSource = source; showPaywall = true; DeepLink.pendingPaywallSource = nil }
+            }
+        }
+    }
+
+    private func addMemo() {
+        guard store.isPro || memos.count < Self.freeLimit else {
+            paywallSource = "memo_limit"; showPaywall = true        // ⭐ 잠긴 기능 탭 → 페이월. 실행할 때마다 띄우는 것보다 3~5배 전환
+            return
+        }
+        context.insert(Memo(title: "새 메모", content: ""))
+        savedCount += 1
+        SharedState.write(count: memos.count + 1)                   // ⑧ 위젯 갱신
+        if savedCount == 3 || savedCount == 20 { requestReview() } // ⑨ 성공 경험 직후. 시스템이 1년 3회로 제한
+    }
+}
+
+```
+
+> 무료 한도의 숫자는 **"쓸모는 있되 한 달 안에 닿는" 값**으로. 너무 낮으면 1점 리뷰, 너무 높으면 전환 0%.
+> D7 리텐션 20% 이하면 무료가 쓸모없는 것이고, 전환 1% 이하면 무료가 너무 좋은 것입니다(로드맵 C-5).
+
+### ④ 페이월 — `SubscriptionStoreView`부터 (심사 요건 자동 충족)
+
+```swift
+// Views/PaywallView.swift
+import SwiftUI
+import StoreKit
+
+struct PaywallView: View {
+    let source: String                                              // "onboarding" / "memo_limit" / "widget" / "settings"
+    @Environment(ProStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var trialEligible = false
+
+    var body: some View {
+        NavigationStack {
+            SubscriptionStoreView(groupID: ProStore.groupID) {      // ⭐ 상품·가격·체험·자동갱신 고지를 Apple이 그려줌
+                VStack(spacing: 10) {
+                    Image(systemName: "note.text.badge.plus").font(.system(size: 44)).foregroundStyle(.tint)
+                    Text(headline).font(.title2.bold()).multilineTextAlignment(.center)
+                    Text("무제한 메모 · iCloud 동기화 · 위젯 전부 · 테마").foregroundStyle(.secondary)
+                    if trialEligible { Text("7일 무료 체험 후 자동 갱신 · 언제든 해지").font(.footnote).foregroundStyle(.secondary) }
+                }
+                .padding(.top, 24)
+            }
+            .subscriptionStoreControlStyle(.prominentPicker)        // 연간이 기본 선택으로 보이게
+            .storeButton(.visible, for: .restorePurchases)          // 복원 버튼 — 심사 필수
+            .storeButton(.visible, for: .policies)                  // 약관·개인정보 링크 — 심사 필수
+            .subscriptionStorePolicyDestination(url: URL(string: "https://you.com/terms")!, for: .termsOfService)
+            .subscriptionStorePolicyDestination(url: URL(string: "https://you.com/privacy")!, for: .privacyPolicy)
+            .onInAppPurchaseCompletion { _, result in
+                if case .success(.success) = result { await store.refresh(); dismiss() }
+            }
+            .safeAreaInset(edge: .bottom) {                         // 평생 옵션은 아래에 작게 — 위에 두면 구독 매출이 평생으로 빠짐
+                if let lifetime = store.products.first(where: { $0.id == ProStore.lifetimeID }) {
+                    Button("평생 이용권 \(lifetime.displayPrice) (한 번만 결제)") {   // ⭐ 가격은 displayPrice만. 직접 쓰면 2.3.7 리젝
+                        Task { if try await store.purchase(lifetime) { dismiss() } }
+                    }
+                    .font(.footnote).padding(.bottom, 8)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("닫기", systemImage: "xmark") { dismiss() }   // 소프트 페이월. 숨기면 4.2 리젝 + 별점 하락
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .task {
+                Analytics.log("paywall_shown", ["source": source])      // 어느 진입점이 전환되는지 — 로드맵 F-6
+                if let yearly = store.products.first(where: { $0.id == "pro_yearly" }) {
+                    trialEligible = await store.isTrialEligible(yearly)
+                }
+            }
+        }
+    }
+
+    private var headline: String {                                  // 진입점별 개인화 — 같은 화면에서 전환이 달라짐
+        switch source {
+        case "memo_limit": "무료 20개를 다 썼어요"
+        case "widget":     "위젯에서 바로 메모하기"
+        default:           "메모를 끝까지, Pro로"
+        }
+    }
+}
+
+// 분석 래퍼 — 첫 앱은 print, 앱이 2개가 되면 Firebase/TelemetryDeck으로 본문만 교체
+enum Analytics {
+    static func log(_ name: String, _ params: [String: String] = [:]) { print("📊", name, params) }
+}
+```
+
+> **직접 만든 페이월로 바꿀 때** 반드시 남길 것: 상품명·기간·`displayPrice`·"자동 갱신, 언제든 해지" 문구·복원 버튼·약관/개인정보 링크·
+> 체험이 있으면 "체험 후 ₩39,000/년 결제". 이 중 하나가 빠진 페이월이 리젝 사유 3.1.2입니다.
+
+### ⑤ 온보딩 — 가치 3장 → 소프트 페이월 → 앱
+
+```swift
+// Views/OnboardingView.swift
+struct OnboardingView: View {
+    @AppStorage("onboardingDone") private var onboardingDone = false
+    @State private var page = 0
+    @State private var showPaywall = false
+
+    private let pages: [(icon: String, title: String, body: String)] = [
+        ("bolt.fill",        "3초 만에 메모",       "잠금 화면 위젯에서 바로 씁니다"),
+        ("icloud.fill",      "아이패드·맥에서도",    "iCloud로 자동 동기화"),
+        ("paintpalette.fill","내 취향대로",          "테마와 글꼴을 고르세요"),
+    ]
+
+    var body: some View {
+        VStack {
+            TabView(selection: $page) {                              // JS: 스와이프 캐러셀
+                ForEach(pages.indices, id: \.self) { i in
+                    VStack(spacing: 16) {
+                        Image(systemName: pages[i].icon).font(.system(size: 64)).foregroundStyle(.tint)
+                        Text(pages[i].title).font(.title.bold())
+                        Text(pages[i].body).foregroundStyle(.secondary)
+                    }
+                    .tag(i)
+                }
+            }
+            .tabViewStyle(.page)
+
+            Button(page < pages.count - 1 ? "다음" : "시작하기") {
+                if page < pages.count - 1 { withAnimation { page += 1 } }
+                else { showPaywall = true }                         // ⭐ 마지막 장 → 페이월 (알림 권한은 여기서 X — 첫 메모 저장 뒤에)
+            }
+            .buttonStyle(.borderedProminent).padding()
+        }
+        .sheet(isPresented: $showPaywall, onDismiss: { onboardingDone = true }) {   // 닫아도, 결제해도 앱으로
+            PaywallView(source: "onboarding")
+        }
+    }
+}
+```
+
+### ⑥ 설정 화면 — 복원·관리·환불·약관이 한곳에
+
+```swift
+// Views/SettingsView.swift
+import SwiftUI
+import StoreKit
+
+struct SettingsView: View {
+    @Environment(ProStore.self) private var store
+    @State private var showManage = false
+    @State private var showPaywall = false
+    @State private var refundTransactionID: UInt64?
+    @State private var showCancelSurvey = false
+
+    var body: some View {
+        Form {
+            Section("Pro") {
+                LabeledContent("상태", value: statusText)
+                if !store.isPro {
+                    Button("Pro 시작하기") { showPaywall = true }
+                } else if store.access != .lifetime {
+                    Button("구독 관리") { showManage = true }        // 숨기면 3.1.2 + 별점 둘 다 잃음
+                    if !store.willAutoRenew {
+                        Button("해지 예약됨 — 무엇이 아쉬웠나요?") { showCancelSurvey = true }
+                    }
+                }
+                Button("구매 복원") { Task { await store.restore() } }
+                Button("환불 요청") { Task { refundTransactionID = await latestTransactionID() } }
+                    .foregroundStyle(.secondary)                    // 설정에 두면 "환불 어떻게 해요" 리뷰가 줄고 환불률 지표가 좋아짐
+            }
+            Section("정보") {
+                Link("이용약관", destination: URL(string: "https://you.com/terms")!)
+                Link("개인정보처리방침", destination: URL(string: "https://you.com/privacy")!)
+                Link("우리 앱 더 보기", destination: URL(string: "https://apps.apple.com/developer/id000000000")!)   // 교차 홍보
+            }
+        }
+        .navigationTitle("설정")
+        .manageSubscriptionsSheet(isPresented: $showManage, subscriptionGroupID: ProStore.groupID)
+        .refundRequestSheet(for: refundTransactionID ?? 0, isPresented: Binding(
+            get: { refundTransactionID != nil }, set: { if !$0 { refundTransactionID = nil } }))
+        .sheet(isPresented: $showPaywall) { PaywallView(source: "settings") }
+        .confirmationDialog("무엇이 아쉬웠나요?", isPresented: $showCancelSurvey) {   // 1탭 설문 — 다음 분기 우선순위
+            ForEach(["가격이 비싸요", "잘 안 쓰게 돼요", "필요한 기능이 없어요", "버그가 있어요"], id: \.self) { reason in
+                Button(reason) { Analytics.log("cancel_reason", ["reason": reason]) }
+            }
+        }
+    }
+
+    private var statusText: String {
+        switch store.access {
+        case .none:         "무료"
+        case .active:       store.willAutoRenew ? "Pro 구독 중" : "Pro (해지 예약)"
+        case .gracePeriod:  "결제 확인 필요"
+        case .billingRetry: "결제 실패 — 결제 수단을 갱신해 주세요"
+        case .lifetime:     "Pro 평생"
+        }
+    }
+
+    private func latestTransactionID() async -> UInt64? {
+        for id in ProStore.subscriptionIDs + [ProStore.lifetimeID] {
+            if case .verified(let tx)? = await Transaction.latest(for: id) { return tx.id }
+        }
+        return nil
+    }
+}
+```
+
+### ⑦ 스키마 버전 — 유료 앱의 첫 번째 사고를 첫 출시 때 막기
+
+출시 후 `@Model`을 바꾸면 기존 사용자 DB와 안 맞아 **앱이 안 뜹니다.** 첫 출시부터 버전을 붙이면 나중 변경이 한 줄이 됩니다.
+STEP 4의 `Models/Memo.swift`를 이 파일로 **대체**합니다 (기존 코드는 `Memo`라는 이름을 그대로 씁니다).
+
+```swift
+// Models/Schema.swift  — JS: prisma migrate / knex 마이그레이션 파일에 해당
+import SwiftData
+
+enum MemoSchemaV1: VersionedSchema {
+    static var versionIdentifier = Schema.Version(1, 0, 0)
+    static var models: [any PersistentModel.Type] { [Memo.self] }
+
+    @Model final class Memo {
+        var title: String
+        var content: String
+        @Attribute(.externalStorage) var imageData: Data?
+        var createdAt: Date
+        init(title: String, content: String, imageData: Data? = nil) {
+            self.title = title; self.content = content; self.imageData = imageData; createdAt = .now
+        }
+    }
+}
+
+enum MemoSchemaV2: VersionedSchema {                                // 1.1 업데이트: 고정(핀) 기능
+    static var versionIdentifier = Schema.Version(2, 0, 0)
+    static var models: [any PersistentModel.Type] { [Memo.self] }
+
+    @Model final class Memo {
+        var title: String
+        var content: String
+        @Attribute(.externalStorage) var imageData: Data?
+        var createdAt: Date
+        var isPinned: Bool = false                                  // ⭐ 새 프로퍼티는 기본값 필수 — 없으면 기존 행을 못 읽음
+        init(title: String, content: String, imageData: Data? = nil) {
+            self.title = title; self.content = content; self.imageData = imageData; createdAt = .now
+        }
+    }
+}
+
+enum MemoMigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MemoSchemaV1.self, MemoSchemaV2.self] }
+    static var stages: [MigrationStage] { [v1toV2] }
+
+    // 기본값 있는 프로퍼티 추가 = lightweight. 이름·타입 변경, 데이터 변환 = .custom(willMigrate:didMigrate:)
+    static let v1toV2 = MigrationStage.lightweight(fromVersion: MemoSchemaV1.self, toVersion: MemoSchemaV2.self)
+}
+
+typealias Memo = MemoSchemaV2.Memo                                  // 앱 코드는 항상 "현재 버전"만 봄
+```
+
+**업데이트마다 하는 테스트**: 이전 빌드(TestFlight) 설치 → 메모 5개 입력 → 새 빌드를 **삭제하지 않고 덮어 설치** → 메모가 살아 있는가.
+CloudKit 동기화를 켤 때는 제약이 추가됩니다(모든 프로퍼티 옵셔널 또는 기본값, `.unique` 불가) — 로드맵 B-4.
+
+### ⑧ 위젯 + 업셀 — 홈 화면을 점유하고, 잠금은 Pro로 연다
+
+File → New → Target → **Widget Extension** ("TodayMemoWidget", Live Activity 체크 해제). 필요한 것 세 가지: **App Group**(앱·위젯 타깃 둘 다 Signing & Capabilities → App Groups → `group.com.you.memo`), **타임라인**, **갱신 알림**.
+
+```swift
+// Shared/SharedState.swift — 앱 타깃과 위젯 타깃 양쪽에 포함 (Target Membership 체크)
+import Foundation
+import WidgetKit
+
+enum SharedState {                                                  // JS: 같은 origin의 localStorage를 앱과 위젯이 공유하는 셈
+    static let defaults = UserDefaults(suiteName: "group.com.you.memo")!
+
+    static func write(count: Int? = nil, isPro: Bool? = nil) {
+        if let count { defaults.set(count, forKey: "memoCount") }
+        if let isPro { defaults.set(isPro, forKey: "isPro") }
+        WidgetCenter.shared.reloadTimelines(ofKind: "TodayMemoWidget")   // ⭐ 이걸 빼먹으면 위젯이 하루 종일 옛날 값
+    }
+    static var count: Int { defaults.integer(forKey: "memoCount") }
+    static var isPro: Bool { defaults.bool(forKey: "isPro") }     // 위젯은 StoreKit을 직접 묻지 않음 — 앱이 써준 값을 읽음
+}
+
+@MainActor
+enum DeepLink {                                                     // 위젯·알림·마케팅 링크 → 페이월. URL 스킴 "memo"는 Info → URL Types에 등록
+    static var pendingPaywallSource: String?
+    static func handle(_ url: URL) {
+        guard url.scheme == "memo" else { return }
+        if url.host == "paywall" { pendingPaywallSource = url.query()?.replacingOccurrences(of: "source=", with: "") ?? "link" }
+        // MemoListView가 .onAppear/.onChange에서 pendingPaywallSource를 읽어 paywallSource에 넣습니다
+    }
+}
+```
+
+```swift
+// TodayMemoWidget/TodayMemoWidget.swift
+import WidgetKit
+import SwiftUI
+
+struct Entry: TimelineEntry { let date: Date; let count: Int; let isPro: Bool }
+
+struct Provider: TimelineProvider {
+    func placeholder(in context: Context) -> Entry { Entry(date: .now, count: 3, isPro: true) }
+    func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) { completion(current()) }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<Entry>) -> Void) {
+        // 위젯은 "언제 무엇을 보여줄지"를 미리 넘기는 구조. 실시간 렌더가 아님 (JS와 가장 다른 점)
+        completion(Timeline(entries: [current()], policy: .after(.now.addingTimeInterval(30 * 60))))
+    }
+    private func current() -> Entry { Entry(date: .now, count: SharedState.count, isPro: SharedState.isPro) }
+}
+
+struct TodayMemoWidgetView: View {
+    @Environment(\.widgetFamily) private var family
+    let entry: Entry
+
+    var body: some View {
+        if family != .systemSmall && !entry.isPro {                  // ⭐ 무료는 작은 위젯만. 중간·큰 위젯은 Pro 잠금 → 탭하면 페이월
+            VStack(spacing: 6) {
+                Image(systemName: "lock.fill")
+                Text("중간 위젯은 Pro에서").font(.caption)
+            }
+            .widgetURL(URL(string: "memo://paywall?source=widget"))
+        } else {
+            VStack(alignment: .leading) {
+                Text("메모").font(.caption).foregroundStyle(.secondary)
+                Text("\(entry.count)").font(.system(.largeTitle, design: .rounded, weight: .bold))
+                Spacer()
+                if family == .systemMedium { Link("새 메모", destination: URL(string: "memo://new")!) }   // 작은 위젯은 widgetURL 하나만 됨
+            }
+            .widgetURL(URL(string: "memo://open"))
+        }
+    }
+}
+
+struct TodayMemoWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "TodayMemoWidget", provider: Provider()) { entry in
+            TodayMemoWidgetView(entry: entry).containerBackground(.fill.tertiary, for: .widget)
+        }
+        .configurationDisplayName("오늘의 메모")
+        .description("메모 개수와 빠른 추가")
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])   // Lock Screen도 같이
+    }
+}
+```
+
+> 위젯은 **설치 뒤 30분~하루 사이에 사용자가 발견**합니다. 홈 화면에 올라간 앱은 삭제율이 눈에 띄게 떨어지고,
+> 잠긴 중간 위젯은 "페이월을 사용자가 스스로 여는" 몇 안 되는 진입점입니다. 4-12의 Live Activity·App Intents는 앱 카테고리가 맞을 때만.
+
+### ⑨ 리뷰 요청 — ③에 이미 넣었습니다
+
+`@Environment(\.requestReview)`를 **3번째·20번째 저장 직후**에 호출합니다(③ `addMemo`). 시스템이 1년에 3회로 제한하므로 타이밍이 전부입니다.
+첫 실행·에러 직후·페이월 직후·게임오버 직후는 금지. "마음에 드세요?" 사전 질문 화면으로 거르는 패턴은 Apple 가이드라인이 금지합니다.
+1~2점 리뷰에는 24시간 안에 답글, 고쳤으면 "X.Y에서 수정" 답글 갱신 — 평점은 회복됩니다.
+
+### ⑩ `.storekit`으로 돌려보는 시나리오 — 전부 통과해야 제출
+
+Xcode → Debug → StoreKit → **Manage Transactions**(거래 관리자)와 `.storekit` 편집기 옵션(구독 갱신 속도, 실패 시뮬레이션)으로 다 됩니다.
+
+- [ ] 온보딩 → 페이월 닫기 → 무료로 메모 20개 → 21번째에서 페이월(`source=memo_limit`) → 연간 체험 시작 → `isPro == true`
+- [ ] 갱신 속도 "1개월 = 30초"로 → 체험 종료 → 결제 → 갱신 2회 → 거래 관리자에서 **해지** → `willAutoRenew == false` → 설정에 설문 버튼 → 만료 → `access == .none` → 21번째 메모에서 다시 페이월
+- [ ] 편집기 "청구 실패 시뮬레이션" 켜기 → 갱신 시점에 `access == .gracePeriod` → 배너 → 끄기 → 다음 갱신에 `.active`
+- [ ] 거래 관리자에서 **환불** → `revocationDate` → 즉시 `.none`
+- [ ] 앱 삭제 → 재설치 → 복원 버튼 없이 Pro 자동 회복(`currentEntitlements`)
+- [ ] 비행기 모드 → 앱 콜드 스타트 → 첫 프레임부터 Pro(캐시) / 캐시 `checkedAt`을 8일 전으로 바꾸면 무료
+- [ ] Ask to Buy 켜기 → 구매 → `.pending` → 거래 관리자에서 승인 → `Transaction.updates` → Pro
+- [ ] 평생 구매 → 구독 관리 버튼이 사라지고 상태 "Pro 평생"
+- [ ] 위젯: 메모 추가 → 위젯 숫자 갱신 / 무료 상태에서 중간 위젯 탭 → 앱이 페이월(`source=widget`)로
+- [ ] 1.0 빌드로 메모 입력 → V2 스키마 빌드 덮어 설치 → 메모 유지 + `isPinned == false`
+- [ ] 실기기 + Sandbox 계정: 페이월에 **실제 통화 가격**이 뜨는가(ASC 상품 승인 상태)
+
+### STEP 5 완료 체크리스트
+
+- [ ] 카탈로그 3종이 ASC와 `.storekit` 양쪽에 같은 ID로 있고, 연간에만 7일 체험
+- [ ] `ProStore.refresh()`가 앱 시작·포그라운드·구매·복원·거래 업데이트 다섯 곳에서 불림
+- [ ] 페이월에 복원·약관·개인정보·닫기·`displayPrice`만 있는 가격
+- [ ] 설정에 구독 관리·복원·환불 요청·해지 설문
+- [ ] `Schema.swift`가 V1·V2와 마이그레이션 플랜을 가짐
+- [ ] 위젯이 App Group을 읽고, 앱이 저장·권한 변경마다 `reloadTimelines`
+- [ ] ⑩ 시나리오 11개 전부 통과
+- [ ] `paywall_shown(source)`·`cancel_reason` 이벤트가 찍힘 — 출시 후 이 두 숫자가 다음 결정을 만듭니다
+
+> 여기까지가 **"파는 앱"의 최소 완성형**입니다. 다음은 4-4 서명 → 4-5 TestFlight → 4-10 출시. 사업 쪽(니치·가격·ASO·세금·생계 수학)은
+> [iOS 인디 로드맵](./ios-indie-roadmap.md)이 이어받고, 로드맵 PART D·E의 코드는 전부 이 STEP의 것입니다.
+
+---
+
 # PART 4: 실전 보강
 
 ## 4-0. SwiftUI 핵심 API 보강
@@ -2982,6 +3634,11 @@ case .denied, .restricted:
 > 아닙니다. 필요하다면 기능 가치를 설명한 뒤 요청하고, 거부해도 핵심 기능은 그대로 제공하세요.
 
 ## 4-3. 인앱 결제와 구독 (수익화)
+
+> 이 절은 StoreKit 2의 **기본 흐름**(상품 조회·구매·복원·거래 리스너)입니다. 실제로 파는 앱의 구성 —
+> 연간·월간·평생 카탈로그, 구독 상태(유예·청구 재시도) 해석, 오프라인 권한 캐시, `SubscriptionStoreView` 페이월,
+> 무료 한도 게이트, 위젯 업셀 — 은 [STEP 5 메모 Pro](#step-5-메모-pro--구독페이월위젯으로-수익화--ios-전용-단계)에서
+> 하나의 앱으로 완성합니다. 사업 전체 그림은 [iOS 인디 로드맵](./ios-indie-roadmap.md).
 
 StoreKit 2는 별도 패키지 없이 iOS에 들어 있습니다. App Store Connect에서 일회성 상품
 `premium_theme`와 자동 갱신 구독 `pro_monthly`를 만든 뒤, 상품 ID를 코드와 정확히 맞추세요.
@@ -3969,6 +4626,352 @@ final class Wallet {
 > 이 범위를 넘어가면(3D, Android 동시 출시, 큰 콘텐츠) [Unity 트랙](./react-to-unity.md)으로.
 > 사업 전체 그림 — 구독 설계·세금·ASO·포트폴리오 — 은 [iOS 인디 로드맵](./ios-indie-roadmap.md)에서 이어집니다.
 
+## 4-15. 운영 장비 — 크래시 리포팅·Xcode Cloud·매년 9월 OS 대응
+
+> 출시는 시작입니다. 이 절의 세 가지가 없으면 **"심사자 기기에서 죽었다"를 일주일 뒤에 알고**,
+> 업데이트마다 손으로 아카이브·업로드하고, **9월마다 앱이 새 OS에서 깨져 보입니다.**
+> 첫 앱을 제출하기 전에 ①은 반드시, ②③은 첫 업데이트 전에.
+
+### ① 크래시 리포팅 — 어디서 죽는지 알기
+
+| 선택지 | 비용 | 특징 | 언제 |
+|---|---|---|---|
+| **MetricKit + Xcode Organizer** | 무료, SDK 없음 | Apple 기본. 리포트가 **하루 단위로 늦게** 옴 | 첫 앱. 외부 SDK 없이 시작 |
+| **Firebase Crashlytics** | 무료 | 실시간 알림, Firebase Analytics 동봉 | 앱이 2개 이상이거나 실시간이 필요할 때 |
+| **Sentry** | 무료 티어 | 서버·웹과 같은 대시보드 | 서버가 있거나 웹 경험이 있을 때 |
+
+**MetricKit 최소 구성** — 코드 20줄, 외부 의존성 0:
+```swift
+import MetricKit
+import OSLog
+
+// JS: window.onerror + Sentry.captureException 에 해당. OS가 모아뒀다가 다음 실행 때 넘겨줍니다
+final class CrashReporter: NSObject, MXMetricManagerSubscriber {
+    private let log = Logger(subsystem: "com.you.memo", category: "crash")
+
+    override init() {
+        super.init()
+        MXMetricManager.shared.add(self)          // 구독 등록 — 앱 생애 동안 한 번
+    }
+
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        for payload in payloads {
+            for diag in payload.crashDiagnostics ?? [] {
+                let json = diag.jsonRepresentation()   // 스택·예외 타입·OS 버전이 든 JSON
+                let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                let file = dir.appendingPathComponent("crash-\(Int(Date().timeIntervalSince1970)).json")
+                try? json.write(to: file)
+                log.error("crash diagnostic saved: \(file.lastPathComponent, privacy: .public)")
+                // 여기서 자기 서버로 업로드하거나, 설정 화면 "진단 보내기"로 사용자가 공유하게
+            }
+        }
+    }
+}
+
+@main
+struct MemoApp: App {
+    private let crashReporter = CrashReporter()   // ⭐ App 프로퍼티로 잡아두면 앱 생애 동안 살아 있음
+    var body: some Scene { WindowGroup { ContentView() } }
+}
+```
+
+**Crashlytics로 갈 때 3단계**:
+1. SPM으로 `firebase-ios-sdk` 추가 → 타깃에 `FirebaseCrashlytics` 링크. `GoogleService-Info.plist`를 프로젝트에 넣기
+2. `App.init`에서 `FirebaseApp.configure()` 한 줄
+3. **Build Phases → Run Script에 dSYM 업로드 스크립트**(`${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run`).
+   🚨 이걸 빼먹으면 리포트가 함수 이름 없이 **주소 숫자로만** 와서 아무 쓸모가 없습니다(심볼리케이션).
+
+- 4-1의 `Logger`를 **결제·저장 경로 전부**에 넣으세요. "결제했는데 잠금이 안 풀림"은 크래시보다 자주 생기고,
+  로그가 없으면 재현이 안 됩니다. `privacy: .public`은 상품 ID·상태값처럼 개인정보가 아닌 것에만.
+- 심사 리젝 사유가 "크래시"면 리젝 메시지에 `.crash` 파일이 첨부됩니다. Xcode → Window → Organizer → Crashes에
+  드래그하면 심볼리케이션되어 열립니다.
+
+### ② Xcode Cloud — 혼자여도 자동화
+
+혼자면 이걸로 충분합니다(월 25시간 무료, 서명 인증서를 로컬에 둘 필요 없음). 앱이 3개가 되면
+"빌드 → 테스트 → TestFlight 업로드"를 손으로 하는 시간이 개발 시간을 먹기 시작합니다.
+
+```
+Xcode → Integrate → Create Workflow…
+  워크플로 1 "CI"
+    조건: main 브랜치에 푸시
+    액션: Build + Test (시뮬레이터 1종 — iPhone 최신 모델 하나면 충분)
+  워크플로 2 "Release"
+    조건: 태그 v* 생성
+    액션: Archive → Post-Action: TestFlight 내부 그룹 자동 배포
+```
+
+시크릿(API 키)·도구 설치는 `ci_scripts/ci_post_clone.sh`에서 (저장소 루트에 `ci_scripts/` 폴더):
+```bash
+#!/bin/sh
+# JS: CI의 .env 생성 단계. 환경 변수는 Xcode Cloud 워크플로 설정에서 등록
+set -e
+echo "WEATHER_API_KEY = $WEATHER_API_KEY" > "$CI_PRIMARY_REPOSITORY_PATH/Secrets.xcconfig"
+# brew install swiftlint   ← 도구가 필요하면 여기서
+```
+
+- **빌드 번호**: Info.plist의 Build를 손으로 올리지 말고 워크플로 설정의 **"빌드 번호 자동 증가"** 를 켜세요.
+  `CI_BUILD_NUMBER` 환경 변수를 직접 plist에 넣는 방식은 로컬 빌드에서 깨집니다.
+- **서명**: Xcode Cloud가 클라우드 서명을 씁니다. 로컬 인증서 만료와 무관하게 돌아갑니다.
+- **어디까지**: `main` 푸시 → 테스트 통과, 태그 → TestFlight. 그 이상(스크린샷 자동화, 스토어 제출 자동화)은 지금 필요 없습니다.
+- GitHub Actions + fastlane(`match`로 서명 공유)은 **팀이 생기면.** macOS 러너 비용과 서명 관리가 혼자에겐 과합니다.
+
+### ③ 매년 9월 — 새 OS 대응
+
+**Liquid Glass (iOS 26)**: Xcode 26 SDK로 빌드하면 툴바·탭바·시트·알림이 **자동으로** 새 디자인이 됩니다.
+코드를 안 바꿔도 앱 외형이 바뀐다는 뜻이라, 새 SDK로 처음 빌드한 날 모든 화면을 한 번 봐야 합니다.
+
+```swift
+// 이전 외형을 "한 릴리스 동안만" 유지하고 싶으면 (임시 도피처 — 다음 메이저에서 제거 예정)
+// Info.plist: UIDesignRequiresCompatibility = YES
+
+// 커스텀 컨트롤을 새 디자인에 맞추려면
+Button("저장") { save() }
+    .buttonStyle(.glass)                     // 시스템 글래스 버튼
+
+GlassEffectContainer {                       // 여러 글래스 요소가 겹칠 때 하나로 합쳐 렌더
+    HStack {
+        Image(systemName: "star").glassEffect()
+        Image(systemName: "heart").glassEffect()
+    }
+}
+```
+
+**새 SDK 첫 빌드에서 확인할 것 4가지**:
+- [ ] 툴바 아이콘이 서로 겹치거나 잘리지 않는가 (글래스 툴바는 여백 규칙이 다름)
+- [ ] 탭바가 떠 있어서 리스트 마지막 항목을 가리지 않는가 (`.safeAreaInset`이 아니라 시스템 여백을 믿을 것)
+- [ ] 시트 배경이 반투명이 되어 뒤 콘텐츠와 글씨가 겹쳐 보이지 않는가
+- [ ] 커스텀 배경색 위의 글씨 대비 — 글래스가 배경을 비추면 대비가 떨어짐 (4-8 접근성)
+
+**연간 루틴**:
+
+| 시기 | 할 일 |
+|---|---|
+| 6월 (WWDC 직후) | 베타 Xcode로 빌드 → 경고·deprecated 목록을 이슈로. 새 디자인 자동 적용 확인 |
+| 7~8월 | TestFlight로 베타 OS 기기에 배포. 스크린샷을 새 OS로 다시 찍기 |
+| 9월 출시 주 | 호환 빌드를 **OS 출시 전날까지** 제출. 이 주간 App Store 트래픽이 연중 최대 |
+| 10월 | 사용자 분포 보고 최소 타깃 상향 판단 (0-2의 "최신-2" 규칙) |
+
+```swift
+// deprecated 대응은 분기로 — 경고를 0으로 유지하세요. 올해의 경고가 내년엔 에러가 됩니다
+if #available(iOS 26, *) {
+    content.glassEffect()
+} else {
+    content.background(.regularMaterial)
+}
+```
+
+> 이 루틴이 사업에서 어떤 의미인지(9월 매출 변동, 런웨이)는 [iOS 인디 로드맵 B-7](./ios-indie-roadmap.md).
+
+## 4-16. 로그인·백엔드·네트워크 복원력 (필요할 때만)
+
+> 🚨 **첫 앱은 로그인 없이, 서버 없이.** 로그인이 생기는 순간 계정 삭제(5.1.1(v))·개인정보처리방침·
+> Sign in with Apple(4.8)·서버 비용이 따라옵니다. 개발 3배, 심사 2배, 구독자 0명일 때도 고정비.
+> 이 절은 그게 **정말** 필요해졌을 때 — "사용자 간 공유"나 "웹에서도 써야 함"이 나왔을 때 — 읽으세요.
+
+### ① 백엔드 선택표
+
+| | 장점 | 단점 | 이런 앱 |
+|---|---|---|---|
+| **CloudKit** | 무료, Apple 계정 자동 로그인, SwiftData와 동기화, 서버 코드 없음 | Android 불가, 복잡한 쿼리·집계 약함 | **유틸 앱 기본값** (STEP 5의 동기화 플랜) |
+| **Firebase** | Auth·Firestore·무료 티어, Android와 공유 | 벤더 종속, 비용 예측 어려움 | 크로스 플랫폼, 소셜 기능 |
+| **Supabase** | Postgres·SQL, 오픈소스, RLS | 직접 운영 감각 필요 | 웹 경험자, 관계형 데이터 |
+| **자체 서버** | 전부 가능 | 시간·비용·보안 전부 내 몫 | B2B, 웹 결제, 복잡한 도메인 |
+
+**한 줄 규칙**: 서버가 필요한 이유가 "동기화"뿐이면 **CloudKit**(SwiftData + CloudKit, 로그인 화면조차 없음).
+"사용자 간 공유"면 Firebase/Supabase. 그 전엔 서버 없이.
+
+### ② Keychain — 진짜 API
+
+4-0-9에서 "토큰은 Keychain에"라고만 했습니다. 실제 코드는 이겁니다(STEP 5의 구독 권한 캐시가 이걸 씁니다):
+
+```swift
+import Security
+
+enum Keychain {
+    // JS엔 대응물이 없습니다 — localStorage는 평문, 여기는 OS가 암호화하고 앱 삭제 후에도 남을 수 있음
+    static func set(_ data: Data, for key: String) throws {
+        delete(key)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock   // 백그라운드 갱신도 읽을 수 있게
+        ]
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeychainError.status(status) }
+    }
+    static func get(_ key: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
+    }
+    static func delete(_ key: String) {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: key]
+        SecItemDelete(query as CFDictionary)
+    }
+    enum KeychainError: Error { case status(OSStatus) }
+}
+
+// 사용: Codable 값은 JSONEncoder로 Data로 바꿔서 (STEP 5의 AccessCache가 정확히 이 패턴)
+try Keychain.set(JSONEncoder().encode(entry), for: "pro.access.v1")
+let entry = Keychain.get("pro.access.v1").flatMap { try? JSONDecoder().decode(Entry.self, from: $0) }
+```
+
+- **여기 넣는 것**: 인증 토큰, 구독 권한 캐시(STEP 5), 사용자 식별자(`credential.user`).
+- **UserDefaults가 부적합한 이유**: iCloud 백업으로 **새 기기에 따라갑니다.** 토큰이 다른 사람 기기로 복원되는 셈.
+- ⚠️ 시뮬레이터·실기기 모두 **앱을 삭제해도 Keychain 값이 남을 수 있습니다.** 테스트 때 `Keychain.delete`로 초기화하거나,
+  첫 실행 감지(`@AppStorage("hasLaunched")`)에서 지우세요.
+- SPM 래퍼(`KeychainAccess`)를 써도 무방합니다. 위 30줄이 하는 일이 전부라 직접 두는 편이 의존성이 적습니다.
+
+### ③ Sign in with Apple — 서드파티 로그인이 있으면 필수(4.8)
+
+Google·카카오 로그인을 넣는 순간 Apple 로그인도 **같은 비중으로** 있어야 합니다. 로그인이 하나뿐이면 Apple만 넣는 게 가장 쉽습니다.
+Signing & Capabilities → **+ Sign in with Apple**.
+
+```swift
+import AuthenticationServices
+
+struct LoginView: View {
+    var body: some View {
+        SignInWithAppleButton(.signIn) { request in
+            request.requestedScopes = [.fullName, .email]
+        } onCompletion: { result in
+            switch result {
+            case .success(let auth):
+                guard let credential = auth.credential as? ASAuthorizationAppleIDCredential else { return }
+                let userID = credential.user                 // ⭐ 안정적 식별자 — Keychain에 저장
+                try? Keychain.set(Data(userID.utf8), for: "apple.user")
+
+                // ⚠️ 이름·이메일은 "첫 로그인 한 번만" 옵니다. 지금 저장 안 하면 영영 못 받습니다
+                let name = credential.fullName?.formatted()
+                let email = credential.email                 // Hide My Email이면 @privaterelay.appleid.com 릴레이 주소
+                // credential.identityToken → 서버 검증용 JWT (서버가 있을 때 Apple 공개키로 검증)
+                _ = (name, email)
+            case .failure(let error):
+                print("로그인 실패: \(error)")               // 사용자 취소도 여기로 옴 — 에러 UI 띄우지 말 것
+            }
+        }
+        .signInWithAppleButtonStyle(.black)
+        .frame(height: 50)
+    }
+}
+
+// 앱 시작 시: 사용자가 설정에서 Apple ID 연결을 끊었는지 확인
+func checkAppleCredential() async {
+    guard let data = Keychain.get("apple.user"), let userID = String(data: data, encoding: .utf8) else { return }
+    let state = try? await ASAuthorizationAppleIDProvider().credentialState(forUserID: userID)
+    if state == .revoked || state == .notFound {
+        Keychain.delete("apple.user")                      // 로그아웃 처리
+    }
+}
+```
+
+- 릴레이 주소로 **메일을 보내려면** App Store Connect → 서비스 → Sign in with Apple에 발신 도메인·이메일을 등록해야 합니다. 등록 안 하면 반송됩니다.
+- 서버가 있으면 `identityToken`을 서버로 보내 Apple 공개키(`https://appleid.apple.com/auth/keys`)로 검증한 뒤 세션을 만드세요. 클라이언트가 보낸 `userID`만 믿으면 안 됩니다.
+
+### ④ 계정 삭제 — 5.1.1(v)
+
+계정 생성이 있는 앱은 **앱 안에서** 계정을 삭제할 수 있어야 합니다. 설정 화면에 "계정 삭제" 행 하나.
+
+```
+계정 삭제 흐름
+ 1. confirmationDialog로 재확인 (4-0-4)
+ 2. 서버 데이터 삭제 (사용자 행 + 업로드 파일)
+ 3. Apple 토큰 revoke — 서버에서 POST https://appleid.apple.com/auth/revoke (client_secret JWT 필요)
+    → 이걸 해야 사용자의 "Apple ID 설정 → 로그인 사용 앱" 목록에서 사라지고, 심사가 이걸 확인합니다
+ 4. 로컬 정리: Keychain.delete("apple.user"), SwiftData 컨테이너 비우기, @AppStorage 초기화
+ 5. 로그인 화면으로
+```
+
+- 🚨 "웹사이트에서 삭제하세요" 링크만 두면 리젝입니다. 앱 안에서 시작·완료되어야 합니다.
+- 삭제 요청 후 처리에 시간이 걸리면(백업 보존 등) 그 사실과 기간을 화면에 쓰세요. 숨기면 리젝 사유.
+
+### ⑤ 네트워크 복원력 — STEP 3의 `WeatherService`에 얹는 것 3개
+
+**(a) 재시도 + 지수 백오프** — 일시적 오류만, 4xx는 즉시 실패:
+```swift
+// JS: axios-retry 와 같은 역할. 재시도해도 되는 에러만 골라야 합니다 (404를 3번 치면 안 됨)
+func withRetry<T>(maxAttempts: Int = 3, _ work: () async throws -> T) async throws -> T {
+    var delay: Double = 0.5                                 // 0.5s → 1s → 2s
+    for attempt in 1...maxAttempts {
+        do {
+            return try await work()
+        } catch let error as URLError
+            where [.timedOut, .networkConnectionLost, .notConnectedToInternet].contains(error.code)
+                  && attempt < maxAttempts {
+            try await Task.sleep(for: .seconds(delay))
+            delay *= 2
+        }
+        // 그 외 에러(4xx, 디코딩 실패, 취소)는 즉시 throw
+    }
+    fatalError("unreachable")   // 루프가 return 또는 throw로 끝남
+}
+
+// 사용
+let weather = try await withRetry { try await service.fetchWeather(city: city) }
+```
+
+**(b) 타임아웃 + URLCache** — 기본 타임아웃 60초는 너무 깁니다:
+```swift
+let config = URLSessionConfiguration.default
+config.timeoutIntervalForRequest = 15                                 // 요청당 15초
+config.urlCache = URLCache(memoryCapacity: 20 * 1024 * 1024,           // 20MB
+                           diskCapacity: 100 * 1024 * 1024)            // 100MB — AsyncImage도 이 캐시를 씀
+config.requestCachePolicy = .useProtocolCachePolicy                    // 서버 Cache-Control을 따름
+let session = URLSession(configuration: config)                        // WeatherService에 주입
+
+// 오프라인 폴백에만: 실패했을 때 캐시라도 보여주기
+var request = URLRequest(url: url)
+request.cachePolicy = .returnCacheDataElseLoad
+```
+
+**(c) 온라인 여부 관찰** — 요청이 실패한 뒤가 아니라, 실패하기 전에 알려주기:
+```swift
+import Network
+
+@Observable
+final class NetworkMonitor {
+    private(set) var isOnline = true
+    private let monitor = NWPathMonitor()
+
+    init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in self?.isOnline = (path.status == .satisfied) }   // UI 상태는 메인으로
+        }
+        monitor.start(queue: DispatchQueue(label: "network.monitor"))
+    }
+}
+
+// 화면 — 오프라인 배너 (JS: navigator.onLine + 'offline' 이벤트)
+struct ContentView: View {
+    @State private var network = NetworkMonitor()
+
+    var body: some View {
+        MemoListView()
+            .overlay(alignment: .top) {
+                if !network.isOnline {
+                    Text("오프라인 — 저장은 되고, 동기화는 연결되면 됩니다")
+                        .font(.footnote).padding(8)
+                        .frame(maxWidth: .infinity)
+                        .background(.yellow.opacity(0.9))
+                }
+            }
+            .animation(.default, value: network.isOnline)
+    }
+}
+```
+
+- **401**은 토큰 갱신 1회 후 재시도, 그래도 401이면 로그아웃(무한 갱신 루프 금지).
+- 이미지 캐시는 `AsyncImage`가 `URLSession.shared`의 `URLCache`를 쓰므로 (b) 설정을 `URLCache.shared`에 적용하면 충분합니다.
+- 오프라인에서도 **쓰기는 항상 되게**(SwiftData 로컬 저장) 하고, 동기화만 미루세요. "오프라인이라 저장 안 됨"이 1점 리뷰의 단골입니다.
+
 ---
 
 # PART 5: 학습 로드맵 & 리소스
@@ -3989,10 +4992,10 @@ final class Wallet {
 | 2 | PART 1 — 문법 훑기 (**1-7 struct/class, 1-8 Optional, 1-9 async**는 집중) | 1~2시간 |
 | 3 | PART 2 — 치트시트 북마크 (**상태 프로퍼티 래퍼 표는 정독**) | 20분 |
 | 4 | PART 3 STEP 1 + **STEP 1.5 상태 관리** 직접 해보기 | 2~3시간 |
-| 5 | PART 4 읽기 (4-6 에러, 4-13 지뢰, 4-10 출시 우선) | 1~2시간 |
+| 5 | PART 4 읽기 (4-6 에러, 4-13 지뢰, 4-10 출시 우선) + **STEP 5 메모 Pro 훑기**(페이월·상태 해석 코드가 어떻게 생겼는지) | 2~3시간 |
 | 6 | Landmarks 튜토리얼 Part 1~2 | 1시간 |
 
-**총 6~9시간**
+**총 7~10시간**
 
 > **보강 학습**: 자기완결 학습을 원하면 PART 1 직후 PART 1.5를, 샘플 앱을 마친 뒤
 > PART 4의 4-0을 이어서 읽으세요. 빠른 실행만 목표인 경우에는 필요한 절부터 찾아봐도 됩니다.
@@ -4001,8 +5004,8 @@ final class Wallet {
 **컴파일 에러 읽기**는 사용자가 판단해야 하는 영역이라 여기에 시간을 쓰는 게 효율적입니다.
 (SwiftUI 에러 메시지가 부정확해서, "무슨 증상인지"를 정확히 설명할 수 있어야 AI도 고칩니다.)
 
-**한계**: Swift 동시성 깊은 부분(actor, Sendable), Core Data/StoreKit 같은 큰 프레임워크는
-필요해질 때 별도로 파야 합니다.
+**한계**: Swift 동시성 깊은 부분(actor, Sendable)은 필요해질 때. Core Data는 필요해질 때 별도로.
+**StoreKit은 STEP 5·4-3에, 운영(크래시·CI·OS 대응)은 4-15에** 있으니 첫 출시 전에 그 두 절은 직접 타이핑하세요.
 
 ### 🎓 Full (전통 iOS 개발자 루트)
 
@@ -4013,11 +5016,12 @@ final class Wallet {
 | 2주차 | STEP 2 — List·입력·스와이프 | 할 일 앱 |
 | 3주차 | STEP 3 — URLSession·@Observable·NavigationStack | 날씨 앱 |
 | 4주차 | STEP 4 — SwiftData·PhotosPicker·테마 | 메모 앱 |
-| 5주차 | PART 4 (테스트·접근성·성능) + Landmarks 완주 | 테스트 붙은 앱 |
-| 6주차 | 고유 기능 1개 (위젯 추천) + TestFlight 배포 | 위젯 붙은 앱 |
-| 7주차~ | 본인 아이디어 앱 + 심사 통과 | 첫 출시 앱 |
+| 5주차 | **STEP 5 — 카탈로그·페이월·상태 해석·마이그레이션·위젯 업셀** | 수익화된 메모 Pro |
+| 6주차 | PART 4 (테스트·접근성·성능) + 4-15 크래시·Xcode Cloud + TestFlight 배포 | 테스트·CI 붙은 앱 |
+| 7주차 | [iOS 인디 로드맵](./ios-indie-roadmap.md) PART C — 니치 검증 + 스토어 자산 | 검증된 앱 아이디어 + 스토어 페이지 초안 |
+| 8주차~ | 본인 아이디어 앱 + 심사 통과 + 주간 지표 루틴(로드맵 F-6) | **첫 수익 앱** |
 
-**총 30~45시간** (6~8주, 주당 5~7시간)
+**총 40~55시간** (8~10주, 주당 5~7시간)
 
 ## JS 개발자가 특히 주의할 점 (Swift)
 
